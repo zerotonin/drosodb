@@ -8,6 +8,9 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./ddb.sqlite3"
     data_dir: Path = Path("./data")
+    # Stamped into every QR payload ("db=" field). Change if you ever
+    # federate with another DB install so scans can be routed.
+    database_id: str = "local"
 
 
 settings = Settings()
