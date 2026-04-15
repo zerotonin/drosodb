@@ -18,3 +18,5 @@ build/
 .claude/
 # runtime label PNGs (not docs/sample_label.png, which IS tracked)
 data/
+# locally built docs site
+site/
