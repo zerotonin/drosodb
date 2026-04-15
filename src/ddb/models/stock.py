@@ -62,6 +62,8 @@ class Vial(SQLModel, table=True):
     owner_id: int | None = Field(default=None, foreign_key="user.id")
     is_active: bool = Field(default=True, index=True)
     flipped_from_id: int | None = Field(default=None, foreign_key="vial.id")
+    # 1 = original; incremented on every flip / copy.
+    generation: int = Field(default=1, index=True)
     notes: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
     decommissioned_at: datetime | None = None
