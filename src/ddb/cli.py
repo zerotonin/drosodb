@@ -1,17 +1,21 @@
 from pathlib import Path
 
 import typer
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from ddb.camera.capture import preview, resolve_role
 from ddb.camera.config import load_assignments, save_assignments
 from ddb.camera.enumeration import discover_cameras
 from ddb.db import engine, init_db
 from ddb.importers.genotype_csv import import_genotypes_csv
+from ddb.models import Genotype
+from ddb.workflows import VialNotFoundError, WorkflowError, create_vial, flip_vial
 
 app = typer.Typer(help="DDB — Drosophila Vial Tracking System")
 camera_app = typer.Typer(help="Detect, assign, and preview cameras.")
+vial_app = typer.Typer(help="Vial workflows: create, flip.")
 app.add_typer(camera_app, name="camera")
+app.add_typer(vial_app, name="vial")
 
 
 @app.command("init-db")
@@ -87,6 +91,64 @@ def camera_preview(role: str) -> None:
     cam = resolve_role(role)
     typer.echo(f"Previewing {role} — {cam.device_path} (bus {cam.bus_path}). Press 'q' to close.")
     preview(cam.device_path, window_title=f"{role} camera")
+
+
+def _resolve_genotype(session: Session, genotype: str) -> Genotype | None:
+    """Accept a numeric id or an exact name."""
+    if genotype.isdigit():
+        return session.get(Genotype, int(genotype))
+    return session.exec(select(Genotype).where(Genotype.name == genotype)).first()
+
+
+@vial_app.command("create")
+def vial_create_cmd(
+    genotype: str = typer.Argument(..., help="Genotype id or exact name."),
+    owner_id: int | None = typer.Option(None, "--owner-id"),
+    notes: str | None = typer.Option(None, "--notes"),
+) -> None:
+    """Create a new active vial and render its label PNG."""
+    with Session(engine) as session:
+        geno = _resolve_genotype(session, genotype)
+        if geno is None:
+            typer.echo(f"Genotype {genotype!r} not found.", err=True)
+            raise typer.Exit(1)
+        result = create_vial(
+            session,
+            genotype_id=geno.id,
+            owner_id=owner_id,
+            notes=notes,
+        )
+    typer.echo(
+        f"Created vial id={result.vial.id} print_code={result.vial.print_code} "
+        f"(genotype: {geno.name})\n  label: {result.label_path}"
+    )
+
+
+@vial_app.command("flip")
+def vial_flip_cmd(
+    print_code: str = typer.Argument(..., help="Print code of the vial to flip."),
+    owner_id: int | None = typer.Option(None, "--owner-id"),
+    notes: str | None = typer.Option(None, "--notes"),
+) -> None:
+    """Decommission a vial and create its successor."""
+    with Session(engine) as session:
+        try:
+            result = flip_vial(
+                session,
+                old_print_code=print_code.upper(),
+                owner_id=owner_id,
+                notes=notes,
+            )
+        except VialNotFoundError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1) from e
+        except WorkflowError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(2) from e
+    typer.echo(
+        f"Flipped {print_code} -> {result.vial.print_code} (id={result.vial.id})\n"
+        f"  label: {result.label_path}"
+    )
 
 
 if __name__ == "__main__":
