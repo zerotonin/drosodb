@@ -1,0 +1,21 @@
+name: ddb
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - sqlmodel
+  - alembic
+  - pydantic-settings
+  - fastapi
+  - uvicorn
+  - segno
+  - pillow
+  - typer
+  - pytest
+  - pytest-cov
+  - ruff
+  - mypy
+  - httpx
+  - git
+  - gh
