@@ -15,3 +15,6 @@ dist/
 build/
 .idea/
 .vscode/
+.claude/
+# runtime label PNGs (not docs/sample_label.png, which IS tracked)
+data/
