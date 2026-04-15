@@ -1,0 +1,41 @@
+site_name: DDB — Drosophila Vial Tracking
+site_description: QR-coded Drosophila stock and vial management for small labs.
+site_url: https://zerotonin.github.io/drosodb/
+repo_url: https://github.com/zerotonin/drosodb
+repo_name: zerotonin/drosodb
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: index.md
+  - Spec (core): droso_db_project.md
+  - Spec (extended): droso_db_project_extended.md
