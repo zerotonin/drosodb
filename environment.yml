@@ -19,3 +19,4 @@ dependencies:
   - httpx
   - git
   - gh
+  - opencv>=4.9
