@@ -3,6 +3,7 @@ from ddb.workflows.vial import (
     VialNotFoundError,
     WorkflowError,
     create_vial,
+    decommission_vial,
     flip_vial,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "VialNotFoundError",
     "WorkflowError",
     "create_vial",
+    "decommission_vial",
     "flip_vial",
 ]

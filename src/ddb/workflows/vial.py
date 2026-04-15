@@ -156,6 +156,7 @@ def flip_vial(
         owner_id=owner_id if owner_id is not None else old.owner_id,
         org_unit_id=old.org_unit_id,
         flipped_from_id=old.id,
+        generation=old.generation + 1,
         notes=notes,
     )
     session.add(new)
@@ -188,3 +189,37 @@ def flip_vial(
     session.refresh(new)
     label_path = _render_and_save_label(new, genotype)
     return CreatedVial(vial=new, label_path=label_path)
+
+
+def decommission_vial(
+    session: Session,
+    *,
+    print_code: str,
+    actor_id: int | None = None,
+    reason: str | None = None,
+) -> Vial:
+    """Mark an active vial as end-of-life WITHOUT creating a successor.
+
+    Used when a stock is discarded rather than flipped onward.
+    """
+    vial = session.exec(
+        select(Vial).where(Vial.print_code == print_code, Vial.is_active.is_(True))
+    ).first()
+    if vial is None:
+        raise VialNotFoundError(f"no active vial with print_code={print_code!r}")
+
+    vial.is_active = False
+    vial.decommissioned_at = datetime.now(UTC)
+    session.add(vial)
+    session.add(
+        AuditEvent(
+            actor_id=actor_id,
+            entity_type="vial",
+            entity_id=vial.id,
+            action="decommission",
+            payload={"reason": reason or "end-of-life", "new_vial_id": None},
+        )
+    )
+    session.commit()
+    session.refresh(vial)
+    return vial
