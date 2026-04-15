@@ -11,6 +11,7 @@ from ddb.db import engine, init_db
 from ddb.importers.genotype_csv import import_genotypes_csv
 from ddb.lineage import export_lineage_csv, lineage_for
 from ddb.models import Genotype, Vial
+from ddb.reports import search_vials, vial_detail
 from ddb.scanner import PayloadParseError, lookup_by_payload, parse_payload, scan_loop
 from ddb.seed import seed_demo
 from ddb.workflows import (
@@ -134,6 +135,105 @@ def vial_create_cmd(
         f"Created vial id={result.vial.id} print_code={result.vial.print_code} "
         f"(genotype: {geno.name})\n  label: {result.label_path}"
     )
+
+
+@vial_app.command("search")
+def vial_search_cmd(
+    active_only: bool = typer.Option(False, "--active", help="Only active vials."),
+    inactive_only: bool = typer.Option(False, "--inactive", help="Only decommissioned vials."),
+    genotype: str | None = typer.Option(
+        None, "--genotype", help="Substring match on genotype name."
+    ),
+    gene: str | None = typer.Option(
+        None, "--gene", help="Substring across chromosomes + phenotype."
+    ),
+    owner: str | None = typer.Option(None, "--owner", help="Exact owner username."),
+    unit: str | None = typer.Option(None, "--unit", help="Exact org-unit name."),
+    donor: str | None = typer.Option(None, "--donor", help="Exact donor name."),
+    donor_strain_id: str | None = typer.Option(None, "--donor-strain-id"),
+    generation: int | None = typer.Option(None, "--generation"),
+    limit: int = typer.Option(50, "--limit"),
+) -> None:
+    """Search vials across joined genotype/user/donor/unit tables."""
+    if active_only and inactive_only:
+        typer.echo("--active and --inactive are mutually exclusive", err=True)
+        raise typer.Exit(2)
+    active: bool | None = True if active_only else (False if inactive_only else None)
+
+    with Session(engine) as session:
+        rows = search_vials(
+            session,
+            active=active,
+            genotype_name_contains=genotype,
+            gene_contains=gene,
+            owner_username=owner,
+            org_unit_name=unit,
+            donor_name=donor,
+            donor_strain_id=donor_strain_id,
+            generation=generation,
+            limit=limit,
+        )
+
+    if not rows:
+        typer.echo("No vials match.")
+        return
+    typer.echo(
+        f"{'CODE':<6} {'GEN':>3} {'ACT':<3} {'OWNER':<10} {'GENO':<18} {'DONOR':<18} CREATED"
+    )
+    for r in rows:
+        act = "Y" if r.is_active else "-"
+        typer.echo(
+            f"{r.print_code:<6} {r.generation:>3} {act:<3} "
+            f"{(r.owner_username or '-'):<10} {r.genotype_name[:18]:<18} "
+            f"{(r.donor_name or '-')[:18]:<18} {r.created_at.date()}"
+        )
+    typer.echo(f"({len(rows)} row{'s' if len(rows) != 1 else ''})")
+
+
+@vial_app.command("show")
+def vial_show_cmd(
+    print_code: str = typer.Argument(..., help="Print code of the vial."),
+) -> None:
+    """Print a full detail record (the scan-panel view) for one vial."""
+    with Session(engine) as session:
+        v = session.exec(select(Vial).where(Vial.print_code == print_code.upper())).first()
+        if v is None:
+            typer.echo(f"No vial with print_code={print_code!r}", err=True)
+            raise typer.Exit(1)
+        detail = vial_detail(session, v.id)
+
+    assert detail is not None
+    r = detail.row
+    typer.echo(f"  print code   {r.print_code}")
+    typer.echo(f"  status       {'ACTIVE' if r.is_active else 'decommissioned'}")
+    typer.echo(f"  generation   {r.generation}")
+    typer.echo(f"  genotype     {r.genotype_name}  (id={r.genotype_id})")
+    if r.phenotype:
+        typer.echo(f"  phenotype    {r.phenotype}")
+    typer.echo(f"  wildtype     {'yes' if r.is_wildtype else 'no'}")
+    typer.echo(f"  owner        {r.owner_username or '-'} ({r.owner_full_name or '-'})")
+    typer.echo(f"  org unit     {r.org_unit_name or '-'}")
+    typer.echo(f"  donor        {r.donor_name or '-'}  strain#{r.donor_strain_id or '-'}")
+    typer.echo(f"  created      {r.created_at.isoformat(timespec='seconds')}")
+    if r.decommissioned_at:
+        typer.echo(f"  decomm'd     {r.decommissioned_at.isoformat(timespec='seconds')}")
+    if detail.parent_flip_print_code:
+        typer.echo(f"  flipped from {detail.parent_flip_print_code}")
+    if detail.parent_cross_print_codes:
+        typer.echo(f"  cross parents {', '.join(detail.parent_cross_print_codes)}")
+    if detail.child_flip_print_codes:
+        typer.echo(f"  flipped to   {', '.join(detail.child_flip_print_codes)}")
+    if detail.child_cross_print_codes:
+        typer.echo(f"  cross kids   {', '.join(detail.child_cross_print_codes)}")
+    if r.notes:
+        typer.echo(f"  notes        {r.notes}")
+    if detail.audit:
+        typer.echo("  audit:")
+        for a in detail.audit:
+            typer.echo(
+                f"    {a.created_at.isoformat(timespec='seconds')}  "
+                f"{a.action:<14} by {a.actor_username or '-'}"
+            )
 
 
 @vial_app.command("decommission")
