@@ -327,6 +327,20 @@ def genotype_list_cmd(
         typer.echo(f"{g.id:>3}  {wt:<2}  {(g.donor_strain_id or '-'):<8}  {g.name}")
 
 
+@app.command("gui")
+def gui_cmd() -> None:
+    """Launch the PySide6 GUI (requires the [gui] extra / conda env)."""
+    try:
+        from ddb.gui.app import main as gui_main
+    except ModuleNotFoundError as e:
+        typer.echo(
+            f"PySide6 not installed: {e}\n  pip install -e .[gui]  (or use the conda env)",
+            err=True,
+        )
+        raise typer.Exit(1) from e
+    raise typer.Exit(gui_main())
+
+
 @app.command("seed-demo")
 def seed_demo_cmd(
     csv_path: Path = typer.Option(
