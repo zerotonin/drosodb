@@ -1,0 +1,16 @@
+No,Strain Name,Chromosome 1,Chromosome 2,Chromosom 3 ,Donor,Donor ID,Vials active,Wildtype,notes
+1,Grazzer,"""+ / +""","""+ / +""","""+ / +""",AG Goepfert,- ,4,TRUE,wild caught AG Goepfert
+2,Moere,"""+ / +""","""+ / +""","""+ / +""",AG Goepfert,- ,1,TRUE,wild caught AG Goepfert
+3,Oregon R  Carle,"""+ / +""","""+ / +""","""+ / +""",Carle Japan,,20,TRUE,Oregon R sample by Carle
+4,Oregon R comaprisson,"""+ / +""","""+ / +""","""+ / +""",AG Goepfert,- ,9,TRUE,Oregon R copy  made when dark flies arrived in AG Goepfert
+5,dark fly,"""+ / +""","""+ / +""","""+ / +""",Naoyuki Fuse,- ,6,TRUE,kept in darkness since 1954
+6,dark fly light Carle,"""+ / +""","""+ / +""","""+ / +""",Carle Japan,- ,7,TRUE,reintroduced into light 2010
+7,rutabaga,P{ry[+t7.2]=lArB}Adcy1[rut-2080]/P{ry[+t7.2]=lArB}Adcy1[rut-2080] ,P{w[+mC]=UAS-Adcy1.Z}2/P{w[+mC]=UAS-Adcy1.Z}2,"""+ / +""",Bloomington Stock Center,9405,4,FALSE,rutabaga mutant with rescue on the second chromosome
+8,,"""+ / +""",nompC / Cyo,lexA-GCamp6M /Tm6b,AG Goepfert,603,5,FALSE,nompC null balanced over cyo with a lexA GCamp balanced over Tm6B
+9,,"""+ / +""",nompC / Cyo,lexA-nompC rescue,AG Goepfert,849,3,FALSE,nompC null balanced over cyo with lexA-nompC rescue balanced over Tm6B
+10,,"""+ / +""",nompC / Cyo,Gal4 - nompC / Tm6b,AG Goepfert,860,4,FALSE,nompC null balanced over cyo with Gal4 rescue balanced over Tm6B
+11,nlg2,"""+ / +""",dnlg2[KO17]/dnlg2[KO17],"""+ / +""",AG Goepfert,499,3,FALSE,neuroligin 2 knockout
+12,nlg4,"""+ / +""",dnlg4[KO70]/dnlg4[KO70],"""+ / +""",AG Goepfert,498,5,FALSE,neuroligin 4 knock out
+13,,yw/yw,sp/cyo,20x UAS - 6x mCherry/20x UAS - 6x mCherry,AG Fiala,942,2,FALSE,fully balanced UAs mcherry
+14,balancer,w*/w*,Kr[If-1]/CyO,"D[1]/TM3, Ser[1]",AG Goepfert,833,1,FALSE,balancer fly
+15,spalthof,w*/w*,nsyb-lexA/ Cyo,"lop-Gcamp6M/ Tm6c,Sb,Tb",AG Goepfert,641,2,FALSE,synaptobrevin driven GCamP6m
