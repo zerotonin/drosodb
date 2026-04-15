@@ -1,5 +1,9 @@
 # DDB — Drosophila Vial Tracking System
 
+[![CI](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml/badge.svg)](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml)
+[![Docs](https://github.com/zerotonin/drosodb/actions/workflows/docs.yml/badge.svg)](https://zerotonin.github.io/drosodb/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+
 Single-user lab system for tracking *Drosophila* vials with QR-coded labels,
 full lineage, and an auditable history.
 
