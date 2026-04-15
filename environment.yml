@@ -21,3 +21,4 @@ dependencies:
   - gh
   - opencv>=4.9
   - mkdocs-material
+  - pyside6>=6.6
