@@ -24,3 +24,4 @@ dependencies:
   - pyside6>=6.6
   - pip:
       - brother_ql>=0.9
+      - zxing-cpp>=2.2
