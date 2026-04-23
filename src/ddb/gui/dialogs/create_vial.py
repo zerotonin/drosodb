@@ -56,6 +56,12 @@ def _genotype_display(g: Genotype) -> str:
     return g.name
 
 
+# Small pause between batch prints so the Brother's BT stack can fully
+# close the prior RFCOMM socket before we open the next — without this we
+# hit "[Errno 16] Device or resource busy" on most prints past the first.
+_BATCH_PRINT_SETTLE_S = 1.0
+
+
 class CreateVialDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -222,6 +228,8 @@ class CreateVialDialog(QDialog):
             print_png = _print_png
             printer_error_cls = _PrinterError
 
+        import time as _time
+
         batch_codes: list[str] = []
         printed_count = 0
         failed_count = 0
@@ -231,7 +239,7 @@ class CreateVialDialog(QDialog):
         geno_name = ""
 
         try:
-            for _ in range(count):
+            for i in range(count):
                 with Session(engine) as s:
                     created = create_vial(
                         s,
@@ -259,6 +267,9 @@ class CreateVialDialog(QDialog):
                         failed_count += 1
                         if first_print_error is None:
                             first_print_error = str(e)
+                    # Settle between prints (but not after the last one).
+                    if i < count - 1:
+                        _time.sleep(_BATCH_PRINT_SETTLE_S)
         except WorkflowError as e:
             QMessageBox.critical(
                 self,

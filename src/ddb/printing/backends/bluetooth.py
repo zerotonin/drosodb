@@ -17,9 +17,19 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from ddb.printing.status import StatusBlock, decode_status_blocks
+
+# Exit codes from the sidecar (see _SENDER_SCRIPT).
+_SIDECAR_RC_CONNECT_FAILED = 3
+_SIDECAR_RC_SEND_FAILED = 4
+
+# When we get EBUSY on connect (the printer's BT stack hasn't fully torn
+# down the previous RFCOMM socket), back off and retry. Values tuned on
+# a QL-820NWB — typical retry need in a batch-print scenario is 1 pause.
+_CONNECT_RETRY_BACKOFFS_S: tuple[float, ...] = (0.75, 1.5, 3.0, 6.0)
 
 # Sidecar script. Small, stdlib-only, runs under /usr/bin/python3.
 _SENDER_SCRIPT = r"""
@@ -119,30 +129,58 @@ class BluetoothRFCOMMBackend:
         return f"bt:{self.mac}@ch{self.channel}"
 
     def send(self, raster: bytes, *, timeout: float = 30.0) -> list[StatusBlock]:
+        """Send a raster job; retry transparently on EBUSY at connect time.
+
+        EBUSY (errno 16) from `connect()` means the printer's BT stack
+        is still reclaiming the previous socket. This is common when the
+        caller batches several prints — the fix is to wait and try again,
+        not to bail. Failures during the send itself are NOT retried —
+        partial raster bytes on the wire can confuse the printer.
+        """
         if not self.system_python.exists():
             raise FileNotFoundError(
                 f"{self.system_python} not found — BT backend needs a Python "
                 f"built with BlueZ support. Try /usr/bin/python3."
             )
-        proc = subprocess.run(
-            [
-                str(self.system_python),
-                "-c",
-                _SENDER_SCRIPT,
-                self.mac,
-                str(self.channel),
-                str(timeout),
-            ],
-            input=raster,
-            capture_output=True,
-            timeout=timeout + 10,
-            check=False,
-        )
-        if proc.returncode != 0:
-            raise ConnectionError(
-                f"Bluetooth send failed (rc={proc.returncode}): "
-                f"{proc.stderr.decode(errors='replace').strip()}"
+
+        last_error: str | None = None
+        for attempt in range(len(_CONNECT_RETRY_BACKOFFS_S) + 1):
+            proc = subprocess.run(
+                [
+                    str(self.system_python),
+                    "-c",
+                    _SENDER_SCRIPT,
+                    self.mac,
+                    str(self.channel),
+                    str(timeout),
+                ],
+                input=raster,
+                capture_output=True,
+                timeout=timeout + 10,
+                check=False,
             )
+            if proc.returncode == 0:
+                break
+
+            stderr = proc.stderr.decode(errors="replace").strip()
+            last_error = stderr
+            # Only the connect-phase EBUSY failure is retried. Anything
+            # else (send-phase, non-errno-16 connect errors, etc.) raises
+            # immediately so we don't mask real bugs.
+            is_retriable = (
+                proc.returncode == _SIDECAR_RC_CONNECT_FAILED
+                and "[Errno 16]" in stderr
+                and attempt < len(_CONNECT_RETRY_BACKOFFS_S)
+            )
+            if not is_retriable:
+                raise ConnectionError(f"Bluetooth send failed (rc={proc.returncode}): {stderr}")
+            time.sleep(_CONNECT_RETRY_BACKOFFS_S[attempt])
+        else:  # exhausted retries
+            raise ConnectionError(
+                f"Bluetooth send failed after {len(_CONNECT_RETRY_BACKOFFS_S) + 1} "
+                f"attempts: {last_error}"
+            )
+
         try:
             line = proc.stdout.decode().strip().splitlines()[-1]
             payload = json.loads(line)
