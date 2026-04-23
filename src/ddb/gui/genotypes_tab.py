@@ -12,6 +12,7 @@ same validation.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -30,7 +31,12 @@ from ddb.genotype import format_notation
 from ddb.gui.dialogs import CreateGenotypeDialog
 from ddb.gui.genotype_form import GenotypeForm, ensure_donor
 from ddb.models import Genotype, User
-from ddb.workflows import WorkflowError, update_genotype
+from ddb.workflows import (
+    GenotypeStillHasActiveVialsError,
+    WorkflowError,
+    drop_genotype_from_stock,
+    update_genotype,
+)
 
 
 class GenotypesTab(QWidget):
@@ -82,14 +88,22 @@ class GenotypesTab(QWidget):
 
         self.save_btn = QPushButton("Save")
         self.revert_btn = QPushButton("Revert")
+        self.drop_btn = QPushButton("Drop from stock")
+        self.drop_btn.setToolTip(
+            "Mark this genotype as no longer in stock. The row stays for "
+            "lineage/history but is hidden from the New-Vial dropdown."
+        )
         self.save_btn.setEnabled(False)
         self.revert_btn.setEnabled(False)
+        self.drop_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._save)
         self.revert_btn.clicked.connect(self._load_current)
+        self.drop_btn.clicked.connect(self._drop_from_stock)
         btns = QHBoxLayout()
         btns.addWidget(self.save_btn)
         btns.addWidget(self.revert_btn)
         btns.addStretch()
+        btns.addWidget(self.drop_btn)
 
         right = QVBoxLayout()
         right.addWidget(self.form)
@@ -112,13 +126,22 @@ class GenotypesTab(QWidget):
     def reload(self) -> None:
         keep_id = self._current_id
         self.list.clear()
+        italic = QFont()
+        italic.setItalic(True)
+        grey = QColor("#888")
         with Session(engine) as s:
             for g in s.exec(select(Genotype).order_by(Genotype.id)).all():
                 label = f"{g.id:>3}  {g.name}"
                 if g.donor_strain_id:
                     label += f"  (#{g.donor_strain_id})"
+                if not g.is_in_stock:
+                    label += "   — dropped"
                 item = QListWidgetItem(label)
                 item.setData(Qt.ItemDataRole.UserRole, g.id)
+                if not g.is_in_stock:
+                    # Grey italic = "in the DB for history, but not available".
+                    item.setForeground(grey)
+                    item.setFont(italic)
                 self.list.addItem(item)
         if keep_id is not None:
             for i in range(self.list.count()):
@@ -150,10 +173,13 @@ class GenotypesTab(QWidget):
         finally:
             self._suppress_dirty = False
 
+        status = "<b style='color:#a00'>NOT IN STOCK</b>" if not g.is_in_stock else "in stock"
         self.meta_lbl.setText(
             f"<b>Notation preview:</b> <code>{format_notation(g)}</code> "
-            f"&nbsp;·&nbsp; <b>id:</b> {g.id}"
+            f"&nbsp;·&nbsp; <b>id:</b> {g.id} &nbsp;·&nbsp; {status}"
         )
+        # Drop button is only for still-in-stock strains; dropped is terminal.
+        self.drop_btn.setEnabled(bool(g.is_in_stock))
         self._set_dirty(False)
 
     def _clear_form(self) -> None:
@@ -163,6 +189,7 @@ class GenotypesTab(QWidget):
         finally:
             self._suppress_dirty = False
         self.meta_lbl.setText("<i>Select a genotype on the left or click New.</i>")
+        self.drop_btn.setEnabled(False)
         self._set_dirty(False)
 
     # ------------------------------------------------------------------
@@ -211,6 +238,60 @@ class GenotypesTab(QWidget):
                 QMessageBox.critical(self, "Update failed", str(e))
                 return
 
+        self.reload()
+
+    # ------------------------------------------------------------------
+    # Drop from stock
+    # ------------------------------------------------------------------
+
+    def _drop_from_stock(self) -> None:
+        if self._current_id is None:
+            return
+        with Session(engine) as s:
+            g = s.get(Genotype, self._current_id)
+            if g is None:
+                return
+            name = g.name
+            keeper = s.exec(
+                select(User).where(User.username == settings.default_owner_username)
+            ).first()
+            actor_id = keeper.id if keeper else None
+
+            # Confirm first — this is a user-visible state change.
+            ok = QMessageBox.question(
+                self,
+                "Drop from stock?",
+                f"Mark <b>{name}</b> as no longer in stock?<br><br>"
+                "The row stays for lineage + history, but it will be hidden "
+                "from the New-Vial dropdown.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                drop_genotype_from_stock(s, genotype_id=self._current_id, actor_id=actor_id)
+            except GenotypeStillHasActiveVialsError as e:
+                QMessageBox.critical(
+                    self,
+                    "Cannot drop — active vials remain",
+                    f"<b>{name}</b> still has "
+                    f"{len(e.active_print_codes)} active vial(s):<br><br>"
+                    f"<code>{', '.join(e.active_print_codes)}</code><br><br>"
+                    "Decommission or flip them first, then try again.",
+                )
+                return
+            except WorkflowError as e:
+                QMessageBox.critical(self, "Could not drop", str(e))
+                return
+
+        QMessageBox.warning(
+            self,
+            "Genotype dropped",
+            f"<b>{name}</b> is now listed as <b>not available</b>. "
+            "It has been removed from the New-Vial dropdown.",
+        )
         self.reload()
 
     # ------------------------------------------------------------------

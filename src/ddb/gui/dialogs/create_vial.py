@@ -112,7 +112,12 @@ class CreateVialDialog(QDialog):
             default_user = _upsert_default_user(s)
             default_unit = _upsert_default_org_unit(s)
 
-            genos = s.exec(select(Genotype).order_by(Genotype.name)).all()
+            # Dropped-from-stock genotypes don't appear in New Vial — the
+            # user has consciously declared those gone and we shouldn't
+            # tempt them into recreating a vial by accident.
+            genos = s.exec(
+                select(Genotype).where(Genotype.is_in_stock.is_(True)).order_by(Genotype.name)
+            ).all()
             users = s.exec(select(User).order_by(User.username)).all()
             units = s.exec(select(OrgUnit).order_by(OrgUnit.name)).all()
 
