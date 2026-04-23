@@ -68,3 +68,57 @@ def test_update_chromosomes_changes_notation(session: Session) -> None:
     after = format_notation(session.get(Genotype, gid))
     assert "GAL4-nompC / CyO" in after
     assert "nompC / Cyo" not in after
+
+
+def test_drop_genotype_refuses_when_active_vials_exist(
+    session: Session, tmp_path, monkeypatch
+) -> None:
+    """Safety: don't let the user pretend they have no flies if they do."""
+    from ddb.config import settings
+    from ddb.workflows import (
+        GenotypeStillHasActiveVialsError,
+        create_vial,
+        drop_genotype_from_stock,
+    )
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    gid = _seed(session)
+    created = create_vial(session, genotype_id=gid)
+    with pytest.raises(GenotypeStillHasActiveVialsError) as ei:
+        drop_genotype_from_stock(session, genotype_id=gid)
+    assert created.vial.print_code in ei.value.active_print_codes
+
+
+def test_drop_genotype_succeeds_when_no_active_vials(session: Session) -> None:
+    from ddb.workflows import drop_genotype_from_stock
+
+    gid = _seed(session)
+    g = drop_genotype_from_stock(session, genotype_id=gid)
+    assert g.is_in_stock is False
+
+    events = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.entity_type == "genotype",
+            AuditEvent.entity_id == gid,
+            AuditEvent.action == "drop_from_stock",
+        )
+    ).all()
+    assert len(events) == 1
+    assert events[0].payload["name"] == "strain_10"
+
+
+def test_drop_genotype_is_idempotent(session: Session) -> None:
+    from ddb.workflows import drop_genotype_from_stock
+
+    gid = _seed(session)
+    drop_genotype_from_stock(session, genotype_id=gid)
+    # Second call: already out of stock; no additional audit event.
+    drop_genotype_from_stock(session, genotype_id=gid)
+    events = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.entity_type == "genotype",
+            AuditEvent.action == "drop_from_stock",
+        )
+    ).all()
+    assert len(events) == 1

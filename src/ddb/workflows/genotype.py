@@ -9,10 +9,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from ddb.models import AuditEvent, Genotype
-from ddb.workflows.vial import GenotypeNotFoundError
+from ddb.models import AuditEvent, Genotype, Vial
+from ddb.workflows.vial import GenotypeNotFoundError, WorkflowError
+
+
+class GenotypeStillHasActiveVialsError(WorkflowError):
+    """Raised when dropping a genotype that still has active vials in stock."""
+
+    def __init__(self, genotype_id: int, active_print_codes: list[str]) -> None:
+        super().__init__(
+            f"genotype_id={genotype_id} still has "
+            f"{len(active_print_codes)} active vial(s): "
+            f"{', '.join(active_print_codes)}"
+        )
+        self.genotype_id = genotype_id
+        self.active_print_codes = active_print_codes
+
 
 # Fields a user is allowed to edit via `update_genotype`. Anything not in
 # this allow-list is ignored so the GUI can't accidentally scribble onto
@@ -30,6 +44,7 @@ EDITABLE_FIELDS: frozenset[str] = frozenset(
         "is_wildtype",
         "donor_strain_id",
         "donor_id",
+        "is_in_stock",
     }
 )
 
@@ -74,6 +89,52 @@ def update_genotype(
             entity_id=g.id,
             action="update",
             payload={"before": before, "after": after},
+        )
+    )
+    session.commit()
+    session.refresh(g)
+    return g
+
+
+def drop_genotype_from_stock(
+    session: Session,
+    *,
+    genotype_id: int,
+    actor_id: int | None = None,
+) -> Genotype:
+    """Mark a genotype as out-of-stock, refusing if any vials are still active.
+
+    The row stays in the DB (so lineage + reports keep working) — it just
+    disappears from the New-Vial dropdown and greys in the Genotypes list.
+    Pair with an AuditEvent so the transition is recoverable.
+    """
+    g = session.get(Genotype, genotype_id)
+    if g is None:
+        raise GenotypeNotFoundError(f"genotype_id={genotype_id} does not exist")
+    if not g.is_in_stock:
+        return g  # idempotent — already dropped
+
+    # sqlmodel's session.exec(select(single_column)) yields scalars directly.
+    active_codes = list(
+        session.exec(
+            select(Vial.print_code).where(
+                Vial.genotype_id == genotype_id,
+                Vial.is_active.is_(True),
+            )
+        ).all()
+    )
+    if active_codes:
+        raise GenotypeStillHasActiveVialsError(genotype_id, active_codes)
+
+    g.is_in_stock = False
+    session.add(g)
+    session.add(
+        AuditEvent(
+            actor_id=actor_id,
+            entity_type="genotype",
+            entity_id=g.id,
+            action="drop_from_stock",
+            payload={"name": g.name},
         )
     )
     session.commit()
