@@ -2,12 +2,20 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Anchor DB, data, and .env at the package root so `ddb gui` / `ddb vial create`
+# do the right thing regardless of the caller's cwd. Walking three parents up
+# from `src/ddb/config.py` lands at the project root where the editable install
+# lives. Callers who want a different location can always override via env vars.
+_PKG_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="DDB_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_PKG_ROOT / ".env", env_prefix="DDB_", extra="ignore"
+    )
 
-    database_url: str = "sqlite:///./ddb.sqlite3"
-    data_dir: Path = Path("./data")
+    database_url: str = f"sqlite:///{_PKG_ROOT / 'ddb.sqlite3'}"
+    data_dir: Path = _PKG_ROOT / "data"
     # Stamped into every QR payload ("db=" field). Change if you ever
     # federate with another DB install so scans can be routed.
     database_id: str = "local"
