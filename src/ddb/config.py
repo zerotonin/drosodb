@@ -24,9 +24,11 @@ class Settings(BaseSettings):
     #   DK-11201 -> "29x90"
     #   DK-22205 -> "62"      (continuous 62mm)
     printer_label: str = "17x54"
-    # Auto-print on vial create/flip from the GUI. Off by default so a
-    # misconfigured printer can't silently spam labels.
-    printer_auto_print: bool = False
+    # Auto-print on vial create/flip from the GUI. On by default whenever
+    # the printer is enabled — the common case is "new vial → label in hand".
+    # Set DDB_PRINTER_AUTO_PRINT=0 to opt out (the checkbox is still there
+    # so individual vials can skip printing ad-hoc).
+    printer_auto_print: bool = True
 
     # Bluetooth backend
     printer_bluetooth_mac: str | None = None
