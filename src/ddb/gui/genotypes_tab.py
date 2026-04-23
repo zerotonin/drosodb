@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ddb.config import settings
@@ -30,7 +31,7 @@ from ddb.db import engine
 from ddb.genotype import format_notation
 from ddb.gui.dialogs import CreateGenotypeDialog
 from ddb.gui.genotype_form import GenotypeForm, ensure_donor
-from ddb.models import Genotype, User
+from ddb.models import Genotype, User, Vial
 from ddb.workflows import (
     GenotypeStillHasActiveVialsError,
     WorkflowError,
@@ -130,10 +131,21 @@ class GenotypesTab(QWidget):
         italic.setItalic(True)
         grey = QColor("#888")
         with Session(engine) as s:
+            # Single aggregated query for active-vial counts — O(rows)
+            # instead of an N+1 per-genotype lookup.
+            active_counts = dict(
+                s.exec(
+                    select(Vial.genotype_id, func.count(Vial.id))
+                    .where(Vial.is_active.is_(True))
+                    .group_by(Vial.genotype_id)
+                ).all()
+            )
             for g in s.exec(select(Genotype).order_by(Genotype.id)).all():
+                n = active_counts.get(g.id, 0)
                 label = f"{g.id:>3}  {g.name}"
                 if g.donor_strain_id:
                     label += f"  (#{g.donor_strain_id})"
+                label += f"   ·  {n} vial{'s' if n != 1 else ''}"
                 if not g.is_in_stock:
                     label += "   — dropped"
                 item = QListWidgetItem(label)
