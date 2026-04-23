@@ -488,10 +488,24 @@ class ScanTab(QWidget):
         if dlg.exec() != dlg.DialogCode.Accepted or dlg.result is None:
             return
         r = dlg.result
-        suffix = " [printed]" if r.printed else ""
-        self.status.setText(
-            f"created {r.print_code} ({r.genotype_name}) — label: {r.label_path}{suffix}"
-        )
+        batch = len(r.batch_print_codes) or 1
+        if batch > 1:
+            print_suffix = (
+                f" [{r.printed_count}/{batch} printed"
+                + (f", {r.failed_count} failed" if r.failed_count else "")
+                + "]"
+                if r.printed_count or r.failed_count
+                else ""
+            )
+            self.status.setText(
+                f"created {batch} × {r.genotype_name}: "
+                f"{', '.join(r.batch_print_codes)}{print_suffix}"
+            )
+        else:
+            suffix = " [printed]" if r.printed else ""
+            self.status.setText(
+                f"created {r.print_code} ({r.genotype_name}) — label: {r.label_path}{suffix}"
+            )
         # Pre-load the detail panel with the new vial so the user can
         # verify immediately without scanning.
         with Session(engine) as s:

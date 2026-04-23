@@ -8,7 +8,7 @@ biologist only has to pick a genotype and hit OK in the common case.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLineEdit,
     QMessageBox,
+    QSpinBox,
     QVBoxLayout,
 )
 from sqlmodel import Session, select
@@ -32,12 +33,20 @@ from ddb.workflows import WorkflowError, create_vial
 
 @dataclass
 class CreateVialResult:
+    """Batch result — fields are always present for the LAST created vial
+    so existing single-vial callers (e.g. ScanTab's detail panel) keep
+    working unchanged. `batch_print_codes` holds every code created in
+    the same OK click; its length is the total batch size (>=1)."""
+
     vial_id: int
     print_code: str
     label_path: str
     genotype_name: str
     printed: bool = False
     print_message: str | None = None
+    batch_print_codes: list[str] = field(default_factory=list)
+    printed_count: int = 0
+    failed_count: int = 0
 
 
 def _genotype_display(g: Genotype) -> str:
@@ -74,6 +83,16 @@ class CreateVialDialog(QDialog):
         self.notes_edit = QLineEdit()
         self.notes_edit.setPlaceholderText("Optional — e.g. 'fresh flip from stock'")
 
+        # --- Count: number of vials to create in this click ----------------
+        # Each iteration gets its own print code + QR — same genotype/owner/unit.
+        self.count_spin = QSpinBox()
+        self.count_spin.setRange(1, 96)  # plenty for a normal flip day
+        self.count_spin.setValue(1)
+        self.count_spin.setToolTip(
+            "Create this many vials at once — same genotype/owner/unit, "
+            "each with its own print code and QR."
+        )
+
         # --- Auto-print toggle ---------------------------------------------
         self.print_chk = QCheckBox("Print label after creating")
         self.print_chk.setChecked(settings.printer_enabled and settings.printer_auto_print)
@@ -88,6 +107,7 @@ class CreateVialDialog(QDialog):
         form.addRow("Owner:", self.owner_box)
         form.addRow("Org unit:", self.unit_box)
         form.addRow("Notes:", self.notes_edit)
+        form.addRow("Count:", self.count_spin)
         form.addRow("", self.print_chk)
 
         self.buttons = QDialogButtonBox(
@@ -189,46 +209,91 @@ class CreateVialDialog(QDialog):
             return
         org_unit_id = self.unit_box.currentData()  # may be None; workflow accepts it
         notes = self.notes_edit.text().strip() or None
+        count = int(self.count_spin.value())
+
+        # Lazy-import printing only when actually needed.
+        print_png = None
+        printer_error_cls: type | None = None
+        do_print = self.print_chk.isChecked()
+        if do_print:
+            from ddb.printing.service import PrinterError as _PrinterError
+            from ddb.printing.service import print_png as _print_png
+
+            print_png = _print_png
+            printer_error_cls = _PrinterError
+
+        batch_codes: list[str] = []
+        printed_count = 0
+        failed_count = 0
+        first_print_error: str | None = None
+        last_created = None
+        last_label_path: str = ""
+        geno_name = ""
 
         try:
-            with Session(engine) as s:
-                created = create_vial(
-                    s,
-                    genotype_id=geno_id,
-                    actor_id=owner_id,
-                    owner_id=owner_id,
-                    org_unit_id=org_unit_id,
-                    notes=notes,
-                )
-                geno = s.get(Genotype, geno_id)
-                geno_name = geno.name if geno else ""
+            for _ in range(count):
+                with Session(engine) as s:
+                    created = create_vial(
+                        s,
+                        genotype_id=geno_id,
+                        actor_id=owner_id,
+                        owner_id=owner_id,
+                        org_unit_id=org_unit_id,
+                        notes=notes,
+                    )
+                    if not geno_name:
+                        geno = s.get(Genotype, geno_id)
+                        geno_name = geno.name if geno else ""
+                batch_codes.append(created.vial.print_code)
+                last_created = created
+                last_label_path = str(created.label_path)
+
+                if do_print and print_png is not None:
+                    try:
+                        print_png(created.label_path.read_bytes())
+                        printed_count += 1
+                    except (printer_error_cls, OSError, ConnectionError) as e:  # type: ignore[misc]
+                        # Keep going through the batch on print failures —
+                        # the DB rows are already there, the user can hit
+                        # Print on the detail panel or re-run.
+                        failed_count += 1
+                        if first_print_error is None:
+                            first_print_error = str(e)
         except WorkflowError as e:
-            QMessageBox.critical(self, "Could not create vial", str(e))
-            return
+            QMessageBox.critical(
+                self,
+                "Could not create vial",
+                f"{e}\n\nCreated {len(batch_codes)} of {count} before the error.",
+            )
+            if not batch_codes:
+                return
+            # Partial success: fall through and report what did land.
 
-        printed = False
-        print_message: str | None = None
-        if self.print_chk.isChecked():
-            # Lazy import so the dialog still loads when brother_ql is absent.
-            from ddb.printing.service import PrinterError, print_png
+        if failed_count > 0 and first_print_error is not None:
+            msg = (
+                f"{failed_count} of {count} labels failed to print.\n\n"
+                f"First error: {first_print_error}\n\n"
+                "Vials are in the database; you can re-print from the Scan tab's "
+                "Detail panel."
+            )
+            QMessageBox.warning(self, "Print partially failed", msg)
 
-            try:
-                result = print_png(created.label_path.read_bytes())
-                printed = True
-                print_message = result.summary()
-            except (PrinterError, OSError, ConnectionError) as e:
-                # Don't fail the whole create — the vial exists, label is
-                # on disk, the user can hit Print again from DetailPanel.
-                print_message = f"Print failed: {e}"
-                QMessageBox.warning(self, "Print failed", print_message)
-
+        assert last_created is not None  # batch_codes is non-empty here
         self.result = CreateVialResult(
-            vial_id=created.vial.id,
-            print_code=created.vial.print_code,
-            label_path=str(created.label_path),
+            vial_id=last_created.vial.id,
+            print_code=last_created.vial.print_code,
+            label_path=last_label_path,
             genotype_name=geno_name,
-            printed=printed,
-            print_message=print_message,
+            printed=printed_count > 0,
+            print_message=(
+                None
+                if not do_print
+                else f"{printed_count}/{count} printed"
+                + (f" ({failed_count} failed)" if failed_count else "")
+            ),
+            batch_print_codes=batch_codes,
+            printed_count=printed_count,
+            failed_count=failed_count,
         )
         self.accept()
 
