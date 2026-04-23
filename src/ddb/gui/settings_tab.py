@@ -18,6 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QLabel,
@@ -59,16 +60,56 @@ class SettingsTab(QWidget):
     """Debug toggle + quick-entry masks. Emits signals when state changes."""
 
     debug_changed = Signal(bool)
+    default_camera_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_debug_group())
+        layout.addWidget(self._build_camera_group())
         layout.addWidget(self._build_donor_group())
         layout.addWidget(self._build_user_group())
         layout.addWidget(self._build_unit_group())
         layout.addStretch()
+
+    # ------------------------------------------------------------------
+    # Default camera for scanning
+    # ------------------------------------------------------------------
+
+    def _build_camera_group(self) -> QGroupBox:
+        box = QGroupBox("Scanner")
+        self.camera_box = QComboBox()
+        self.camera_box.addItems(["back", "front"])
+        idx = self.camera_box.findText(settings.default_camera_role)
+        if idx >= 0:
+            self.camera_box.setCurrentIndex(idx)
+        self.camera_box.currentTextChanged.connect(self._on_default_camera_changed)
+
+        tip = QLabel(
+            "<i>Which camera the Scan tab uses by default. You can still "
+            "switch per-session via the combo on the Scan tab.</i>"
+        )
+        tip.setStyleSheet("color: #666;")
+
+        form = QFormLayout()
+        form.addRow("Default camera:", self.camera_box)
+        lo = QVBoxLayout(box)
+        lo.addLayout(form)
+        lo.addWidget(tip)
+        return box
+
+    def _on_default_camera_changed(self, role: str) -> None:
+        settings.default_camera_role = role
+        try:
+            _upsert_env_var(_env_path(), "DDB_DEFAULT_CAMERA_ROLE", role)
+        except OSError as e:
+            QMessageBox.warning(
+                self,
+                "Could not save .env",
+                f"Setting applied in-session but not persisted: {e}",
+            )
+        self.default_camera_changed.emit(role)
 
     # ------------------------------------------------------------------
     # Debug toggle

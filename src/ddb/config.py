@@ -55,5 +55,9 @@ class Settings(BaseSettings):
     # Off by default so biologists aren't confronted with debug buttons.
     gui_debug: bool = False
 
+    # Which camera role the Scan tab starts on. Users can still switch
+    # per-session via the combo; this is just the first-run default.
+    default_camera_role: str = "back"
+
 
 settings = Settings()

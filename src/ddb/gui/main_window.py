@@ -19,13 +19,17 @@ class MainWindow(QMainWindow):
         self.reports_tab = ReportsTab()
         self.genotypes_tab = GenotypesTab()
         self.settings_tab = SettingsTab()
-        # Flip the snapshot-button visibility live when the user toggles
-        # debug mode in Settings — saves a restart.
-        self.settings_tab.debug_changed.connect(self.scan_tab.snapshot_btn.setVisible)
         self.tabs.addTab(self.scan_tab, "Scan")
         self.tabs.addTab(self.reports_tab, "Reports")
         self.tabs.addTab(self.genotypes_tab, "Genotypes")
         self.tabs.addTab(self.settings_tab, "Settings")
+
+        # Flip the snapshot-button visibility live when the user toggles
+        # debug mode in Settings — saves a restart.
+        self.settings_tab.debug_changed.connect(self.scan_tab.snapshot_btn.setVisible)
+        # Reflect default-camera changes immediately in the Scan-tab combo.
+        self.settings_tab.default_camera_changed.connect(self._on_default_camera_changed)
+
         # Reload reports + genotypes when the tab becomes visible so data
         # stays fresh after creating/editing from elsewhere in the app.
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -34,11 +38,17 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
 
+    def _on_default_camera_changed(self, role: str) -> None:
+        idx = self.scan_tab.role_box.findText(role)
+        if idx >= 0:
+            self.scan_tab.role_box.setCurrentIndex(idx)
+
     def _on_tab_changed(self, index: int) -> None:
         widget = self.tabs.widget(index)
         if widget is self.reports_tab:
             self.reports_tab._refresh()  # re-run the currently-selected preset
         elif widget is self.genotypes_tab:
+            # Genotype list needs a refresh to show vial-count changes.
             self.genotypes_tab.reload()
 
     def closeEvent(self, event) -> None:  # noqa: N802

@@ -223,6 +223,10 @@ class ScanTab(QWidget):
 
         self.role_box = QComboBox()
         self.role_box.addItems(["back", "front"])
+        # Honour the persisted default — user can still switch per-session.
+        default_idx = self.role_box.findText(settings.default_camera_role)
+        if default_idx >= 0:
+            self.role_box.setCurrentIndex(default_idx)
         self.start_btn = QPushButton("Start")
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
