@@ -37,5 +37,6 @@ markdown_extensions:
 
 nav:
   - Overview: index.md
+  - Operations: operations.md
   - Spec (core): droso_db_project.md
   - Spec (extended): droso_db_project_extended.md
