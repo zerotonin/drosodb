@@ -29,7 +29,7 @@ def test_gui_modules_importable() -> None:
         main_window,
         reports_tab,
         scan_tab,
-        tabs_placeholder,
+        settings_tab,
     )
 
 

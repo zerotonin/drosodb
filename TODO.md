@@ -21,11 +21,11 @@ bullet into the commit/PR that fixes it and delete it from here.
 
 ## GUI
 
-- [ ] **Settings tab is a placeholder.** Wire it up with:
+- [ ] **Settings tab still missing camera-role editing.** The tab now has a
+  debug toggle and donor/user/org-unit quick-entry masks. Still missing:
   - Camera role assignments (front / back) editable from the UI, backed by
     `ddb.camera.config` — so swapping which webcam is "back" doesn't
     require re-running `ddb camera assign` in a terminal.
-  - Toggle for `DDB_GUI_DEBUG` (Scan-tab debug snapshot button visibility).
   - Possibly: printer MAC + label size + auto-print, currently `.env`-only.
 
 ## Scanning

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QMainWindow, QStatusBar, QTabWidget
 from .genotypes_tab import GenotypesTab
 from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
-from .tabs_placeholder import build_settings_tab
+from .settings_tab import SettingsTab
 
 
 class MainWindow(QMainWindow):
@@ -18,10 +18,14 @@ class MainWindow(QMainWindow):
         self.scan_tab = ScanTab()
         self.reports_tab = ReportsTab()
         self.genotypes_tab = GenotypesTab()
+        self.settings_tab = SettingsTab()
+        # Flip the snapshot-button visibility live when the user toggles
+        # debug mode in Settings — saves a restart.
+        self.settings_tab.debug_changed.connect(self.scan_tab.snapshot_btn.setVisible)
         self.tabs.addTab(self.scan_tab, "Scan")
         self.tabs.addTab(self.reports_tab, "Reports")
         self.tabs.addTab(self.genotypes_tab, "Genotypes")
-        self.tabs.addTab(build_settings_tab(), "Settings")
+        self.tabs.addTab(self.settings_tab, "Settings")
         # Reload reports + genotypes when the tab becomes visible so data
         # stays fresh after creating/editing from elsewhere in the app.
         self.tabs.currentChanged.connect(self._on_tab_changed)
