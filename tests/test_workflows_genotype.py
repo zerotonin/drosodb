@@ -122,3 +122,36 @@ def test_drop_genotype_is_idempotent(session: Session) -> None:
         )
     ).all()
     assert len(events) == 1
+
+
+def test_reactivate_genotype_restores_stock_flag(session: Session) -> None:
+    from ddb.workflows import drop_genotype_from_stock, reactivate_genotype_in_stock
+
+    gid = _seed(session)
+    drop_genotype_from_stock(session, genotype_id=gid)
+    g = reactivate_genotype_in_stock(session, genotype_id=gid)
+    assert g.is_in_stock is True
+
+    events = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.entity_type == "genotype",
+            AuditEvent.entity_id == gid,
+            AuditEvent.action == "reactivate_in_stock",
+        )
+    ).all()
+    assert len(events) == 1
+    assert events[0].payload["name"] == "strain_10"
+
+
+def test_reactivate_genotype_is_idempotent(session: Session) -> None:
+    from ddb.workflows import reactivate_genotype_in_stock
+
+    gid = _seed(session)  # seeded row is already in_stock
+    reactivate_genotype_in_stock(session, genotype_id=gid)
+    events = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.entity_type == "genotype",
+            AuditEvent.action == "reactivate_in_stock",
+        )
+    ).all()
+    assert len(events) == 0

@@ -36,6 +36,7 @@ from ddb.workflows import (
     GenotypeStillHasActiveVialsError,
     WorkflowError,
     drop_genotype_from_stock,
+    reactivate_genotype_in_stock,
     update_genotype,
 )
 
@@ -94,17 +95,26 @@ class GenotypesTab(QWidget):
             "Mark this genotype as no longer in stock. The row stays for "
             "lineage/history but is hidden from the New-Vial dropdown."
         )
+        self.reactivate_btn = QPushButton("Re-activate")
+        self.reactivate_btn.setToolTip(
+            "Undo a previous drop — put this genotype back on the "
+            "New-Vial dropdown so you can create vials for it again."
+        )
         self.save_btn.setEnabled(False)
         self.revert_btn.setEnabled(False)
         self.drop_btn.setEnabled(False)
+        self.reactivate_btn.setEnabled(False)
+        self.reactivate_btn.setVisible(False)
         self.save_btn.clicked.connect(self._save)
         self.revert_btn.clicked.connect(self._load_current)
         self.drop_btn.clicked.connect(self._drop_from_stock)
+        self.reactivate_btn.clicked.connect(self._reactivate_in_stock)
         btns = QHBoxLayout()
         btns.addWidget(self.save_btn)
         btns.addWidget(self.revert_btn)
         btns.addStretch()
         btns.addWidget(self.drop_btn)
+        btns.addWidget(self.reactivate_btn)
 
         right = QVBoxLayout()
         right.addWidget(self.form)
@@ -190,8 +200,14 @@ class GenotypesTab(QWidget):
             f"<b>Notation preview:</b> <code>{format_notation(g)}</code> "
             f"&nbsp;·&nbsp; <b>id:</b> {g.id} &nbsp;·&nbsp; {status}"
         )
-        # Drop button is only for still-in-stock strains; dropped is terminal.
-        self.drop_btn.setEnabled(bool(g.is_in_stock))
+        # Drop is for in-stock strains only; Re-activate shows in its
+        # place once the strain is marked not-in-stock. One is always
+        # visible, never both — the transition is the whole workflow.
+        in_stock = bool(g.is_in_stock)
+        self.drop_btn.setVisible(in_stock)
+        self.drop_btn.setEnabled(in_stock)
+        self.reactivate_btn.setVisible(not in_stock)
+        self.reactivate_btn.setEnabled(not in_stock)
         self._set_dirty(False)
 
     def _clear_form(self) -> None:
@@ -202,6 +218,8 @@ class GenotypesTab(QWidget):
             self._suppress_dirty = False
         self.meta_lbl.setText("<i>Select a genotype on the left or click New.</i>")
         self.drop_btn.setEnabled(False)
+        self.reactivate_btn.setEnabled(False)
+        self.reactivate_btn.setVisible(False)
         self._set_dirty(False)
 
     # ------------------------------------------------------------------
@@ -304,6 +322,44 @@ class GenotypesTab(QWidget):
             f"<b>{name}</b> is now listed as <b>not available</b>. "
             "It has been removed from the New-Vial dropdown.",
         )
+        self.reload()
+
+    # ------------------------------------------------------------------
+    # Re-activate into stock
+    # ------------------------------------------------------------------
+
+    def _reactivate_in_stock(self) -> None:
+        if self._current_id is None:
+            return
+        with Session(engine) as s:
+            g = s.get(Genotype, self._current_id)
+            if g is None:
+                return
+            name = g.name
+            keeper = s.exec(
+                select(User).where(User.username == settings.default_owner_username)
+            ).first()
+            actor_id = keeper.id if keeper else None
+
+            ok = QMessageBox.question(
+                self,
+                "Re-activate genotype?",
+                f"Put <b>{name}</b> back on the New-Vial dropdown?<br><br>"
+                "Any existing audit history is preserved.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                reactivate_genotype_in_stock(
+                    s, genotype_id=self._current_id, actor_id=actor_id
+                )
+            except WorkflowError as e:
+                QMessageBox.critical(self, "Could not re-activate", str(e))
+                return
+
         self.reload()
 
     # ------------------------------------------------------------------

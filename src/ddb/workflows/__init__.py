@@ -1,6 +1,7 @@
 from ddb.workflows.genotype import (
     GenotypeStillHasActiveVialsError,
     drop_genotype_from_stock,
+    reactivate_genotype_in_stock,
     update_genotype,
 )
 from ddb.workflows.vial import (
@@ -21,5 +22,6 @@ __all__ = [
     "decommission_vial",
     "drop_genotype_from_stock",
     "flip_vial",
+    "reactivate_genotype_in_stock",
     "update_genotype",
 ]

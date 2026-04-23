@@ -96,6 +96,41 @@ def update_genotype(
     return g
 
 
+def reactivate_genotype_in_stock(
+    session: Session,
+    *,
+    genotype_id: int,
+    actor_id: int | None = None,
+) -> Genotype:
+    """Undo a previous drop — mark a genotype as in-stock again.
+
+    Paired with `drop_genotype_from_stock` so a user who dropped a strain
+    by mistake (or got it back from a collaborator) can bring it back
+    into the New-Vial dropdown without losing history. Audited so the
+    round-trip is visible in the event log.
+    """
+    g = session.get(Genotype, genotype_id)
+    if g is None:
+        raise GenotypeNotFoundError(f"genotype_id={genotype_id} does not exist")
+    if g.is_in_stock:
+        return g  # idempotent — already in stock
+
+    g.is_in_stock = True
+    session.add(g)
+    session.add(
+        AuditEvent(
+            actor_id=actor_id,
+            entity_type="genotype",
+            entity_id=g.id,
+            action="reactivate_in_stock",
+            payload={"name": g.name},
+        )
+    )
+    session.commit()
+    session.refresh(g)
+    return g
+
+
 def drop_genotype_from_stock(
     session: Session,
     *,
