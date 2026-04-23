@@ -60,6 +60,83 @@ def decode_image(frame_bgr: np.ndarray) -> list[str]:
     return payloads
 
 
+def detect_qr_region(frame_bgr: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Locate the QR bounding box without decoding it.
+
+    Uses OpenCV's finder-pattern detector, which works even when the
+    modules are too blurry to decode. Returns (x, y, w, h) in pixel
+    coords, or None if no QR is found.
+    """
+    ok, points = _OPENCV_DETECTOR.detect(frame_bgr)
+    if not ok or points is None or len(points) == 0:
+        return None
+    pts = points.reshape(-1, 2)
+    x_min, y_min = pts.min(axis=0)
+    x_max, y_max = pts.max(axis=0)
+    h, w = frame_bgr.shape[:2]
+    # Pad 15% of QR size so zxing has quiet-zone around the crop.
+    pad_x = int((x_max - x_min) * 0.15)
+    pad_y = int((y_max - y_min) * 0.15)
+    x1 = max(0, int(x_min) - pad_x)
+    y1 = max(0, int(y_min) - pad_y)
+    x2 = min(w, int(x_max) + pad_x)
+    y2 = min(h, int(y_max) + pad_y)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2 - x1, y2 - y1
+
+
+def decode_image_smart(frame_bgr: np.ndarray) -> list[str]:
+    """Decode with a detect→crop→upscale fallback for small / borderline QRs.
+
+    Path:
+      1. Plain decode (zxing or OpenCV) on the full frame. Fast, usually hits.
+      2. If (1) is empty but the OpenCV finder-pattern detector locates a QR,
+         crop to that bounding box, upscale 2×, and decode again.
+
+    Step 2 is what phone scanner apps get for free via region-of-interest
+    autofocus. Our fixed-focus webcam can't zoom the optics, so we zoom
+    the pixels after the fact — this converts "QR in frame but too small /
+    slightly blurred" into a decodable payload in practice.
+    """
+    hits = decode_image(frame_bgr)
+    if hits:
+        return hits
+    region = detect_qr_region(frame_bgr)
+    if region is None:
+        return []
+    x, y, w, h = region
+    crop = frame_bgr[y : y + h, x : x + w]
+    if crop.size == 0:
+        return []
+    big = cv2.resize(crop, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+    return decode_image(big)
+
+
+def frame_sharpness(frame_bgr: np.ndarray, *, roi_only: bool = True) -> float:
+    """Variance of the Laplacian — classic blur metric.
+
+    When `roi_only` is True and OpenCV can detect a QR's finder patterns,
+    sharpness is measured on just the QR's bounding box (+padding). That's
+    far more actionable than whole-frame sharpness, which can read high
+    when the user's face is sharp but the tiny QR is mush.
+
+    Falls back to whole-frame if no QR is detected.
+
+    Rule of thumb for our pipeline: >300 decodes reliably, 100–300 is
+    borderline, <100 is unrecoverable.
+    """
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if roi_only:
+        region = detect_qr_region(frame_bgr)
+        if region is not None:
+            x, y, w, h = region
+            patch = gray[y : y + h, x : x + w]
+            if patch.size > 0:
+                return float(cv2.Laplacian(patch, cv2.CV_64F).var())
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
 def decode_png_bytes(png_bytes: bytes) -> list[str]:
     """Convenience: decode a PNG in memory (used by tests)."""
     arr = np.frombuffer(png_bytes, dtype=np.uint8)
