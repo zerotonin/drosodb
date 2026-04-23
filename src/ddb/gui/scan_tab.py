@@ -53,6 +53,9 @@ class DetailPanel(QWidget):
         self.status_lbl = QLabel("-")
         self.generation_lbl = QLabel("-")
         self.genotype_lbl = QLabel("-")
+        self.notation_lbl = QLabel("-")
+        self.notation_lbl.setWordWrap(True)
+        self.notation_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.phenotype_lbl = QLabel("-")
         self.owner_lbl = QLabel("-")
         self.unit_lbl = QLabel("-")
@@ -63,6 +66,7 @@ class DetailPanel(QWidget):
         form.addRow("Status:", self.status_lbl)
         form.addRow("Generation:", self.generation_lbl)
         form.addRow("Genotype:", self.genotype_lbl)
+        form.addRow("Notation:", self.notation_lbl)
         form.addRow("Phenotype:", self.phenotype_lbl)
         form.addRow("Owner:", self.owner_lbl)
         form.addRow("Org unit:", self.unit_lbl)
@@ -113,6 +117,7 @@ class DetailPanel(QWidget):
         self.status_lbl.setText(status)
         self.generation_lbl.setText(str(r.generation))
         self.genotype_lbl.setText(r.genotype_name)
+        self.notation_lbl.setText(r.genotype_notation)
         self.phenotype_lbl.setText(r.phenotype or "-")
         self.owner_lbl.setText(f"{r.owner_username or '-'} ({r.owner_full_name or '-'})")
         self.unit_lbl.setText(r.org_unit_name or "-")
@@ -151,6 +156,7 @@ class DetailPanel(QWidget):
             self.status_lbl,
             self.generation_lbl,
             self.genotype_lbl,
+            self.notation_lbl,
             self.phenotype_lbl,
             self.owner_lbl,
             self.unit_lbl,
