@@ -51,8 +51,7 @@ def _drain_status(s: socket.socket, *, timeout: float) -> list[StatusBlock]:
         # Stop early if we've seen a terminal status.
         blocks = decode_status_blocks(buf)
         terminal = any(
-            b.is_error or (b.status_type in (0x01, 0x06) and b.phase_type == 0x00)
-            for b in blocks
+            b.is_error or (b.status_type in (0x01, 0x06) and b.phase_type == 0x00) for b in blocks
         )
         if terminal:
             # Got an error OR the "phase back to waiting" block — job is over.

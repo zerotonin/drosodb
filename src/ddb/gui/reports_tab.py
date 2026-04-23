@@ -181,6 +181,4 @@ class ReportsTab(QWidget):
             rows = fn(s, **kwargs)
         self.model.set_rows(rows)
         filter_msg = f" matching {needle!r}" if needle else ""
-        self.status.setText(
-            f"{label}{filter_msg}: {len(rows)} row{'s' if len(rows) != 1 else ''}."
-        )
+        self.status.setText(f"{label}{filter_msg}: {len(rows)} row{'s' if len(rows) != 1 else ''}.")

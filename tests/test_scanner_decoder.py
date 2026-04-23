@@ -49,8 +49,7 @@ def test_full_label_png_decodes_same_as_naked_qr() -> None:
     )
     decoded = decode_png_bytes(png)
     assert raw in decoded, (
-        f"label QR did not decode back to its payload using {active_backend()!r}; "
-        f"got {decoded!r}"
+        f"label QR did not decode back to its payload using {active_backend()!r}; got {decoded!r}"
     )
 
 

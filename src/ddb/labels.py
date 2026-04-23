@@ -143,9 +143,7 @@ def render_label(
     if genotype_notation and genotype_name and genotype_name != genotype_notation:
         subtitle_text = genotype_name
 
-    body_font, primary_lines, subtitle_lines = _fit_body(
-        draw, primary_text, subtitle_text, text_w
-    )
+    body_font, primary_lines, subtitle_lines = _fit_body(draw, primary_text, subtitle_text, text_w)
     line_h = body_font.size + 4
     for line in primary_lines:
         draw.text((text_x, y), line, fill="black", font=body_font)
@@ -274,7 +272,7 @@ def _fit_body(
     # always sees at least a partial alias on the label.
     font = _load_font(20)
     p_lines = _wrap_semicolons(draw, primary, font, max_width)
-    p_lines = p_lines[:3 if subtitle is None else 2]
+    p_lines = p_lines[: 3 if subtitle is None else 2]
     p_lines = [_clip_to_width(draw, line, font, max_width) for line in p_lines]
     if subtitle is not None:
         return font, p_lines, [_clip_to_width(draw, subtitle, font, max_width)]

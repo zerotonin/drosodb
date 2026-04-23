@@ -64,9 +64,7 @@ def test_lookup_legacy_happy_path(session: Session) -> None:
 def test_lookup_legacy_flags_stale_print_code(session: Session) -> None:
     """Label says code XXXXX, vial_id → real vial with a different code."""
     vial = _make_vial(session)
-    parsed = ParsedPayload(
-        print_code="XXXXX", vial_id=vial.id, database_id=settings.database_id
-    )
+    parsed = ParsedPayload(print_code="XXXXX", vial_id=vial.id, database_id=settings.database_id)
     result = lookup_by_payload(session, parsed)
     assert result is not None
     assert not result.print_code_matches
@@ -76,9 +74,7 @@ def test_lookup_legacy_flags_stale_print_code(session: Session) -> None:
 
 def test_lookup_legacy_flags_foreign_database(session: Session) -> None:
     vial = _make_vial(session)
-    parsed = ParsedPayload(
-        print_code=vial.print_code, vial_id=vial.id, database_id="other-lab"
-    )
+    parsed = ParsedPayload(print_code=vial.print_code, vial_id=vial.id, database_id="other-lab")
     result = lookup_by_payload(session, parsed)
     assert result is not None
     assert result.print_code_matches

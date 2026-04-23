@@ -148,7 +148,5 @@ class BluetoothRFCOMMBackend:
             payload = json.loads(line)
             reply = bytes.fromhex(payload["hex"])
         except (ValueError, IndexError, KeyError) as e:
-            raise ConnectionError(
-                f"Could not parse sidecar output: {proc.stdout!r}"
-            ) from e
+            raise ConnectionError(f"Could not parse sidecar output: {proc.stdout!r}") from e
         return decode_status_blocks(reply)

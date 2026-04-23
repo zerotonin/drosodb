@@ -49,9 +49,7 @@ def lookup_by_payload(session: Session, parsed: ParsedPayload) -> LookupResult |
     # vial was flipped and that code was reused later), try any vial with
     # that code; and if the payload carried a vial_id (legacy), try that.
     if vial is None:
-        vial = session.exec(
-            select(Vial).where(Vial.print_code == parsed.print_code)
-        ).first()
+        vial = session.exec(select(Vial).where(Vial.print_code == parsed.print_code)).first()
     if vial is None and parsed.vial_id is not None:
         vial = session.get(Vial, parsed.vial_id)
     if vial is None:

@@ -159,9 +159,7 @@ class CreateVialDialog(QDialog):
             return None
 
         with Session(engine) as s:
-            by_donor = s.exec(
-                select(Genotype).where(Genotype.donor_strain_id == typed)
-            ).first()
+            by_donor = s.exec(select(Genotype).where(Genotype.donor_strain_id == typed)).first()
             if by_donor is not None:
                 return by_donor.id
             by_name = s.exec(select(Genotype).where(Genotype.name == typed)).first()

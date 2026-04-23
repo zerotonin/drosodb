@@ -303,9 +303,7 @@ class ScanTab(QWidget):
         # Auto-snapshot on sharpness peaks when debug mode is on, so the
         # user can tune distance empirically — peaks are hard to catch by
         # hand-clicking a button.
-        auto_dir = (
-            settings.data_dir / "snapshots" / "auto" if settings.gui_debug else None
-        )
+        auto_dir = settings.data_dir / "snapshots" / "auto" if settings.gui_debug else None
         self._grabber = FrameGrabber(role, auto_snapshot_dir=auto_dir)
         self._grabber.frame_ready.connect(self.camera.on_frame)
         self._grabber.payload_decoded.connect(self._on_payload)
@@ -458,8 +456,11 @@ class ScanTab(QWidget):
             f"Sharpness: {sharpness:.0f}   (>300 = decodable, <100 = blurry)",
             f"QR finder patterns located: {'yes' if finder_ok else 'no'}",
             "",
-            (f"zxing-cpp : {len(zxing_hits)} hit(s)  {zxing_hits}"
-             if _ZXING_AVAILABLE else "zxing-cpp : (not installed)"),
+            (
+                f"zxing-cpp : {len(zxing_hits)} hit(s)  {zxing_hits}"
+                if _ZXING_AVAILABLE
+                else "zxing-cpp : (not installed)"
+            ),
             f"opencv    : {len(opencv_hits)} hit(s)  {opencv_hits}",
         ]
         if not zxing_hits and not opencv_hits:

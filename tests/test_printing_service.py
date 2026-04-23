@@ -35,8 +35,40 @@ def _png_bytes(size: tuple[int, int] = (566, 165)) -> bytes:
 
 def _ok_blocks() -> list[StatusBlock]:
     idle = bytes(
-        [0x80, 0x20, 0x42, 0x34, 0x41, 0x30, 0, 0, 0, 0, 0x11, 0x0B,
-         0, 0, 0, 0, 0, 0x36, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        [
+            0x80,
+            0x20,
+            0x42,
+            0x34,
+            0x41,
+            0x30,
+            0,
+            0,
+            0,
+            0,
+            0x11,
+            0x0B,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x36,
+            0x01,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
     )
     return decode_status_blocks(idle)
 
@@ -61,8 +93,40 @@ def test_print_png_with_explicit_backend_bypasses_enabled_flag(
 def test_print_png_raises_on_error_status() -> None:
     # err2=0x40 -> media-mismatch-replace
     err = bytes(
-        [0x80, 0x20, 0x42, 0x34, 0x41, 0x30, 0, 0, 0, 0x40, 0x11, 0x0B,
-         0, 0, 0, 0, 0, 0x36, 0x02, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        [
+            0x80,
+            0x20,
+            0x42,
+            0x34,
+            0x41,
+            0x30,
+            0,
+            0,
+            0,
+            0x40,
+            0x11,
+            0x0B,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x36,
+            0x02,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
     )
     be = FakeBackend(canned=decode_status_blocks(err))
     with pytest.raises(PrinterError, match="media-mismatch"):

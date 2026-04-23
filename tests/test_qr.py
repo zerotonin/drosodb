@@ -28,9 +28,7 @@ def test_short_payload_renders_as_micro_qr() -> None:
     # Micro QR M2 is 13 modules + 2*2 quiet = 17. At scale 6 → 102 px.
     # Full QR v1 is 21 + 2*4 = 29 → 174 px at the same scale.
     # Anything below ~150 px tells us we landed in Micro QR territory.
-    assert img.width <= 150, (
-        f"expected micro QR (<=150px at scale=6, border=2), got {img.width}"
-    )
+    assert img.width <= 150, f"expected micro QR (<=150px at scale=6, border=2), got {img.width}"
 
 
 def test_long_payload_falls_back_to_full_qr() -> None:

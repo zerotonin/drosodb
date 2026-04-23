@@ -26,8 +26,8 @@ class PayloadParseError(ValueError):
 
 @dataclass(frozen=True)
 class ParsedPayload:
-    print_code: str              # always present, upper-cased
-    vial_id: int | None = None   # legacy format only
+    print_code: str  # always present, upper-cased
+    vial_id: int | None = None  # legacy format only
     database_id: str | None = None  # legacy format only
 
     @property

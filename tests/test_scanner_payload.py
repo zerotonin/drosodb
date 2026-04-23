@@ -47,13 +47,13 @@ def test_legacy_print_code_is_upper_cased() -> None:
         "",
         "hello",
         "https://example.com/",
-        "DDB:",                            # compact with no code
-        "DDB:!@#",                         # compact non-alnum
+        "DDB:",  # compact with no code
+        "DDB:!@#",  # compact non-alnum
         "ddb:1:genotype:5?pc=X&db=local",  # legacy wrong entity
-        "ddb:1:vial:abc?pc=X&db=local",    # legacy non-int id
-        "ddb:1:vial:5?db=local",           # legacy missing pc
-        "ddb:1:vial:5?pc=X",               # legacy missing db
-        "ddb:1:vial?pc=X&db=local",        # legacy malformed path
+        "ddb:1:vial:abc?pc=X&db=local",  # legacy non-int id
+        "ddb:1:vial:5?db=local",  # legacy missing pc
+        "ddb:1:vial:5?pc=X",  # legacy missing db
+        "ddb:1:vial?pc=X&db=local",  # legacy malformed path
     ],
 )
 def test_malformed_payloads_raise(raw: str) -> None:

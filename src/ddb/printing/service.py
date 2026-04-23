@@ -42,9 +42,7 @@ def get_backend() -> PrintBackend:
     kind = settings.printer_backend.lower()
     if kind == "bluetooth":
         if not settings.printer_bluetooth_mac:
-            raise PrinterError(
-                "printer_backend=bluetooth but DDB_PRINTER_BLUETOOTH_MAC is unset"
-            )
+            raise PrinterError("printer_backend=bluetooth but DDB_PRINTER_BLUETOOTH_MAC is unset")
         return BluetoothRFCOMMBackend(
             mac=settings.printer_bluetooth_mac,
             channel=settings.printer_bluetooth_channel,
@@ -52,9 +50,7 @@ def get_backend() -> PrintBackend:
         )
     if kind == "network":
         if not settings.printer_network_host:
-            raise PrinterError(
-                "printer_backend=network but DDB_PRINTER_NETWORK_HOST is unset"
-            )
+            raise PrinterError("printer_backend=network but DDB_PRINTER_NETWORK_HOST is unset")
         return NetworkTCPBackend(
             host=settings.printer_network_host,
             port=settings.printer_network_port,

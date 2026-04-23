@@ -25,9 +25,7 @@ def test_update_renames_and_audits(session: Session) -> None:
     assert g.name == "nompC rescue"
 
     events = session.exec(
-        select(AuditEvent).where(
-            AuditEvent.entity_type == "genotype", AuditEvent.entity_id == gid
-        )
+        select(AuditEvent).where(AuditEvent.entity_type == "genotype", AuditEvent.entity_id == gid)
     ).all()
     assert len(events) == 1
     ev = events[0]
@@ -49,9 +47,7 @@ def test_update_is_noop_when_nothing_changes(session: Session) -> None:
     gid = _seed(session)
     update_genotype(session, genotype_id=gid, name="strain_10")  # same value
 
-    events = session.exec(
-        select(AuditEvent).where(AuditEvent.entity_type == "genotype")
-    ).all()
+    events = session.exec(select(AuditEvent).where(AuditEvent.entity_type == "genotype")).all()
     assert events == [], "no-op update should not write an audit event"
 
 
