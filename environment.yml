@@ -22,3 +22,5 @@ dependencies:
   - opencv>=4.9
   - mkdocs-material
   - pyside6>=6.6
+  - pip:
+      - brother_ql>=0.9
