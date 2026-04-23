@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QStatusBar, QTabWidget
 
+from .genotypes_tab import GenotypesTab
+from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
-from .tabs_placeholder import build_genotypes_tab, build_reports_tab, build_settings_tab
+from .tabs_placeholder import build_settings_tab
 
 
 class MainWindow(QMainWindow):
@@ -14,14 +16,26 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.scan_tab = ScanTab()
+        self.reports_tab = ReportsTab()
+        self.genotypes_tab = GenotypesTab()
         self.tabs.addTab(self.scan_tab, "Scan")
-        self.tabs.addTab(build_reports_tab(), "Reports")
-        self.tabs.addTab(build_genotypes_tab(), "Genotypes")
+        self.tabs.addTab(self.reports_tab, "Reports")
+        self.tabs.addTab(self.genotypes_tab, "Genotypes")
         self.tabs.addTab(build_settings_tab(), "Settings")
+        # Reload reports + genotypes when the tab becomes visible so data
+        # stays fresh after creating/editing from elsewhere in the app.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
+
+    def _on_tab_changed(self, index: int) -> None:
+        widget = self.tabs.widget(index)
+        if widget is self.reports_tab:
+            self.reports_tab._refresh()  # re-run the currently-selected preset
+        elif widget is self.genotypes_tab:
+            self.genotypes_tab.reload()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.scan_tab.shutdown()
