@@ -40,13 +40,25 @@ def resolve_role(role: Role) -> CameraInfo:
 
 
 @contextmanager
-def open_capture(device_path: str, width: int = 1280, height: int = 720):
-    """Open a VideoCapture with sensible defaults. Yields the cv2 object."""
+def open_capture(device_path: str, width: int = 1920, height: int = 1080):
+    """Open a VideoCapture and request the highest sensible resolution.
+
+    QR decoding needs as many pixels per module as possible — more so on
+    soft webcams. We ask for 1920x1080; the driver silently degrades to
+    whatever it actually supports (e.g. 1600x1200, 1280x720), so this is
+    a no-regression bump.
+
+    Also ensures autofocus + auto-exposure are enabled. Cheap UVC cameras
+    sometimes ship with them off or don't implement them, in which case
+    `set()` is a harmless no-op.
+    """
     cap = cv2.VideoCapture(device_path, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise CameraNotFoundError(f"Could not open {device_path}")
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
     try:
         yield cap
     finally:
