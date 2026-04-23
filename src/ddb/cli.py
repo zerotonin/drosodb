@@ -452,6 +452,9 @@ def scan_cmd(
     no_preview: bool = typer.Option(False, "--no-preview", help="Headless mode."),
 ) -> None:
     """Live-scan QR labels and print the vial each one refers to."""
+    from ddb.scanner.decoder import active_backend
+
+    typer.echo(f"decoder: {active_backend()}  role: {role}  (q to stop)")
     stop_after = 1 if once else None
     for raw in scan_loop(role, show_preview=not no_preview, stop_after=stop_after):
         try:
