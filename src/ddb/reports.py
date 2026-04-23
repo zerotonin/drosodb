@@ -17,6 +17,7 @@ from datetime import date, datetime
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
+from ddb.genotype import format_notation
 from ddb.models import (
     AuditEvent,
     Donor,
@@ -40,6 +41,7 @@ class VialRow:
     is_active: bool
     genotype_id: int
     genotype_name: str
+    genotype_notation: str  # X ; II ; III [; IV], "+/+" for blank slots
     phenotype: str | None
     is_wildtype: bool
     owner_username: str | None
@@ -123,6 +125,7 @@ def search_vials(
                 is_active=vial.is_active,
                 genotype_id=geno.id,
                 genotype_name=geno.name,
+                genotype_notation=format_notation(geno),
                 phenotype=geno.phenotype,
                 is_wildtype=geno.is_wildtype,
                 owner_username=user.username if user else None,
