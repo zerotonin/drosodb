@@ -26,9 +26,11 @@ app = typer.Typer(help="DDB — Drosophila Vial Tracking System")
 camera_app = typer.Typer(help="Detect, assign, and preview cameras.")
 vial_app = typer.Typer(help="Vial workflows: create, flip.")
 genotype_app = typer.Typer(help="Inspect known genotypes.")
+printer_app = typer.Typer(help="Brother QL-series label printer.")
 app.add_typer(camera_app, name="camera")
 app.add_typer(vial_app, name="vial")
 app.add_typer(genotype_app, name="genotype")
+app.add_typer(printer_app, name="printer")
 
 
 @app.command("init-db")
@@ -325,6 +327,91 @@ def genotype_list_cmd(
     for g in rows:
         wt = "Y" if g.is_wildtype else "-"
         typer.echo(f"{g.id:>3}  {wt:<2}  {(g.donor_strain_id or '-'):<8}  {g.name}")
+
+
+@printer_app.command("test")
+def printer_test_cmd(
+    label_png: Path = typer.Option(
+        Path("docs/sample_label.png"),
+        "--png",
+        help="PNG to print. Defaults to the shipped sample_label.png.",
+    ),
+    timeout: float = typer.Option(30.0, "--timeout"),
+) -> None:
+    """Print a single test label through the configured backend."""
+    from ddb.printing.service import PrinterError, print_png
+
+    if not label_png.exists():
+        typer.echo(f"PNG not found: {label_png}", err=True)
+        raise typer.Exit(1)
+    try:
+        result = print_png(label_png.read_bytes(), timeout=timeout)
+    except PrinterError as e:
+        typer.echo(f"Printer error: {e}", err=True)
+        raise typer.Exit(2) from e
+    typer.echo(result.summary())
+
+
+@printer_app.command("label")
+def printer_label_cmd(
+    print_code: str = typer.Argument(..., help="Print code of the vial."),
+    timeout: float = typer.Option(30.0, "--timeout"),
+) -> None:
+    """Re-print the stored label PNG for an existing vial."""
+    from ddb.printing.service import PrinterError, print_png
+
+    with Session(engine) as session:
+        v = session.exec(select(Vial).where(Vial.print_code == print_code.upper())).first()
+        if v is None:
+            typer.echo(f"No vial with print_code={print_code!r}", err=True)
+            raise typer.Exit(1)
+    label_path = settings.data_dir / "labels" / f"{v.print_code}.png"
+    if not label_path.exists():
+        typer.echo(
+            f"Label PNG missing: {label_path}. Re-render with `ddb vial create/flip`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        result = print_png(label_path.read_bytes(), timeout=timeout)
+    except PrinterError as e:
+        typer.echo(f"Printer error: {e}", err=True)
+        raise typer.Exit(2) from e
+    typer.echo(result.summary())
+
+
+@printer_app.command("status")
+def printer_status_cmd(timeout: float = typer.Option(10.0, "--timeout")) -> None:
+    """Send ESC i S to the printer and decode the reply.
+
+    Useful for verifying BT connectivity and seeing what media is loaded
+    without committing a print job.
+    """
+    from ddb.printing.service import PrinterError, get_backend
+    from ddb.printing.status import decode_status_blocks
+
+    try:
+        backend = get_backend()
+    except PrinterError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(2) from e
+
+    # ESC @ (init) + ESC i S (status request). No raster, no print.
+    query = b"\x00" * 200 + b"\x1b\x40" + b"\x1b\x69\x53"
+    typer.echo(f"Querying {backend.description}…")
+    try:
+        blocks = backend.send(query, timeout=timeout)
+    except (ConnectionError, OSError) as e:
+        typer.echo(f"transport error: {e}", err=True)
+        raise typer.Exit(3) from e
+    # The status-only request also goes through the sidecar's full
+    # read-until-terminal path; just decode whatever came back.
+    blocks = blocks or decode_status_blocks(b"")
+    if not blocks:
+        typer.echo("(no status reply received)")
+        return
+    for b in blocks:
+        typer.echo(f"  {b.describe()}")
 
 
 @app.command("gui")
