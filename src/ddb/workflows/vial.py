@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ddb.config import settings
+from ddb.genotype import format_notation
 from ddb.labels import render_label, save_label
 from ddb.models import AuditEvent, Genotype, Vial
 from ddb.printcode import generate_print_code
@@ -61,13 +62,24 @@ def _unique_print_code(session: Session) -> str:
     )
 
 
-def _render_and_save_label(vial: Vial, genotype: Genotype) -> Path:
+def _render_and_save_label(session: Session, vial: Vial, genotype: Genotype) -> Path:
+    owner_username: str | None = None
+    if vial.owner_id is not None:
+        from ddb.models import User  # local import to avoid a cycle
+
+        owner = session.get(User, vial.owner_id)
+        owner_username = owner.username if owner else None
+
     png = render_label(
         vial_id=vial.id,
         print_code=vial.print_code,
         genotype_name=genotype.name,
         database_id=settings.database_id,
         donor_strain_id=genotype.donor_strain_id,
+        owner_username=owner_username,
+        generation=vial.generation,
+        genotype_notation=format_notation(genotype),
+        created_date=vial.created_at.date().isoformat(),
     )
     return save_label(png, settings.data_dir / "labels", vial.print_code)
 
@@ -119,7 +131,7 @@ def create_vial(
     )
     session.commit()
     session.refresh(vial)
-    label_path = _render_and_save_label(vial, genotype)
+    label_path = _render_and_save_label(session, vial, genotype)
     return CreatedVial(vial=vial, label_path=label_path)
 
 
@@ -187,7 +199,7 @@ def flip_vial(
     )
     session.commit()
     session.refresh(new)
-    label_path = _render_and_save_label(new, genotype)
+    label_path = _render_and_save_label(session, new, genotype)
     return CreatedVial(vial=new, label_path=label_path)
 
 
