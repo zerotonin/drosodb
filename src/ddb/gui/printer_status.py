@@ -107,6 +107,7 @@ class PrinterStatusMonitor(QThread):
         self.interval_s = interval_s
         self._stop = False
         self._wake = threading.Event()
+        self._paused = threading.Event()
         self._last_status = PrinterStatus(PrinterState.UNKNOWN, "No probe yet.")
 
     @property
@@ -120,13 +121,24 @@ class PrinterStatusMonitor(QThread):
         self._stop = True
         self._wake.set()
 
+    def pause(self) -> None:
+        """Stop issuing probes until `resume()`. Used while the reconnect
+        dialog is open — concurrent BlueZ traffic from a probe can crash
+        `bluetoothctl`, taking down a re-pair attempt with it."""
+        self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+        self._wake.set()  # kick the sleep so the next probe fires promptly
+
     def run(self) -> None:
         while not self._stop:
-            self.probe_started.emit()
-            status = probe_printer()
-            self._last_status = status
-            self.status_changed.emit(status)
-            self.probe_finished.emit()
+            if not self._paused.is_set():
+                self.probe_started.emit()
+                status = probe_printer()
+                self._last_status = status
+                self.status_changed.emit(status)
+                self.probe_finished.emit()
             # Interruptible sleep — the next iteration fires either after
             # `interval_s` elapses or when force_probe() is called.
             self._wake.wait(self.interval_s)

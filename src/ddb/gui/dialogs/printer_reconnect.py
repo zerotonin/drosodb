@@ -28,7 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from ddb.config import settings
-from ddb.gui.printer_status import PrinterState, PrinterStatus, probe_printer
+from ddb.gui.printer_status import (
+    PrinterState,
+    PrinterStatus,
+    probe_printer,
+    shared_monitor,
+)
 
 
 class ReconnectChoice(StrEnum):
@@ -40,23 +45,56 @@ class ReconnectChoice(StrEnum):
 # Inline re-pair script — runs under the conda env's Python, uses pexpect
 # to drive bluetoothctl through remove → pair (auto-confirm passkey) →
 # trust → connect.
-_REPAIR_SCRIPT = r"""
+_REPAIR_SCRIPT = r'''
 import pexpect, sys, time
 
 MAC = sys.argv[1]
-bt = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=60)
-bt.logfile_read = sys.stderr
+
+
+def spawn():
+    bt = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=60)
+    bt.logfile_read = sys.stderr
+    return bt
+
+
+def safe_expect(bt, patterns, timeout):
+    """expect() that treats a sudden bluetoothctl EOF as its own signal
+    rather than a hard fail — bluetoothctl occasionally crashes on D-Bus
+    activity (we've seen 'using the D-Bus library' EOFs during remove).
+    Callers can retry after a respawn."""
+    try:
+        return bt.expect(patterns, timeout=timeout)
+    except pexpect.EOF:
+        return -1
+
+
+bt = spawn()
+
 
 def send(c):
     bt.sendline(c); time.sleep(0.3)
+
 
 send("power on")
 send("agent NoInputNoOutput")
 send("default-agent")
 
-# 1) Drop any stale bond on our side. OK if already absent.
+# 1) Drop any stale bond on our side. OK if already absent. If
+#    bluetoothctl crashes mid-remove (seen on 5.72 under D-Bus
+#    contention), respawn a fresh client and carry on — by then the
+#    remove has usually taken effect on BlueZ anyway.
 send(f"remove {MAC}")
-bt.expect([r"Device has been removed", r"Device does not exist", pexpect.TIMEOUT], timeout=8)
+idx = safe_expect(
+    bt,
+    [r"Device has been removed", r"Device does not exist", pexpect.TIMEOUT],
+    timeout=8,
+)
+if idx == -1:
+    time.sleep(1.0)
+    bt = spawn()
+    send("power on")
+    send("agent NoInputNoOutput")
+    send("default-agent")
 
 # 2) After `remove`, BlueZ has no idea the device exists — a bare `pair`
 #    hits 'Device AC:...:xx not available'. Run a brief classic scan so
@@ -107,7 +145,7 @@ send(f"connect {MAC}")
 time.sleep(2)
 send("quit")
 sys.exit(0)
-"""
+'''
 
 
 class _RepairWorker(QThread):
@@ -140,6 +178,15 @@ class PrinterReconnectDialog(QDialog):
 
         self._status = status
         self._repair: _RepairWorker | None = None
+
+        # While this dialog is open we have BlueZ traffic to the printer
+        # under direct user control — if the background monitor also
+        # probes at the same moment, bluetoothctl can crash with a D-Bus
+        # error mid-remove. Pausing here guarantees a clean bus.
+        monitor = shared_monitor()
+        if monitor is not None:
+            monitor.pause()
+        self.finished.connect(self._on_finished)
 
         self.msg_lbl = QLabel()
         self.msg_lbl.setWordWrap(True)
@@ -256,6 +303,14 @@ class PrinterReconnectDialog(QDialog):
     def _on_cancel(self) -> None:
         self.choice = ReconnectChoice.CANCEL
         self.reject()
+
+    def _on_finished(self, _result: int) -> None:
+        # Resume monitor AFTER closing — and kick it to probe now so the
+        # main window's dot reflects the outcome of whatever we just did.
+        monitor = shared_monitor()
+        if monitor is not None:
+            monitor.resume()
+            monitor.force_probe()
 
 
 def ensure_printer_or_ask(parent, status: PrinterStatus) -> ReconnectChoice:
