@@ -34,7 +34,12 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
+      # enablement: true asks the action to turn GitHub Pages on via the
+      # REST API if it isn't yet — removes the manual "enable Pages in
+      # repo settings" step that was tripping the very first deploy.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
