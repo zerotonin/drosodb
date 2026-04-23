@@ -18,12 +18,12 @@ from PIL import Image
 # We hardcode the ones DDB actually uses so users don't need to import the
 # library just to know the target size.
 PRINTABLE_PX: dict[str, tuple[int, int]] = {
-    "17x54": (566, 165),    # DK-11204 die-cut (our default)
-    "29x90": (991, 306),    # DK-11201 address label
-    "38x90": (991, 413),    # DK-11208 shipping label
-    "12": (106, 0),         # DK-N55224 continuous 12mm (height = any)
-    "29": (306, 0),         # DK-22210 continuous 29mm
-    "62": (696, 0),         # DK-22205 continuous 62mm
+    "17x54": (566, 165),  # DK-11204 die-cut (our default)
+    "29x90": (991, 306),  # DK-11201 address label
+    "38x90": (991, 413),  # DK-11208 shipping label
+    "12": (106, 0),  # DK-N55224 continuous 12mm (height = any)
+    "29": (306, 0),  # DK-22210 continuous 29mm
+    "62": (696, 0),  # DK-22205 continuous 62mm
 }
 
 
@@ -52,6 +52,16 @@ def build_raster(
         # brother_ql must be an optional import — the package is only needed
         # when actually printing; devs running tests without hardware bits
         # should still be able to `import ddb.printing` for the decoder.
+        #
+        # On first import, brother_ql.conversion / .raster transitively pull
+        # brother_ql.devicedependent, which fires a logger.warn about its
+        # own deprecation. Our code never references that submodule — the
+        # warning is meant for brother_ql's own maintainers finishing an
+        # internal refactor. Silence just that logger so real errors on
+        # stderr still surface.
+        import logging as _logging
+
+        _logging.getLogger("brother_ql.devicedependent").setLevel(_logging.ERROR)
         from brother_ql.conversion import convert
         from brother_ql.raster import BrotherQLRaster
     except ImportError as e:  # pragma: no cover — exercised in manual runs
