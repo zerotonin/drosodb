@@ -94,8 +94,13 @@ def render_label(
     italic subtitle. When notation is None, we fall back to the old layout
     with the name as the main text — keeps existing callers/tests working.
     """
-    payload = build_payload(vial_id, print_code, database_id)
-    qr_png = make_qr_png(payload, scale=6, border=1)
+    # vial_id / database_id are kept in the signature for caller compat but
+    # no longer land in the QR — compact `DDB:<print_code>` renders as a
+    # Micro QR with ~60% bigger physical cells on the 17mm label, which is
+    # what a soft webcam needs. Border = 2 modules is Micro-QR spec.
+    _ = (vial_id, database_id)
+    payload = build_payload(print_code)
+    qr_png = make_qr_png(payload, scale=6, border=2)
     qr_img = Image.open(BytesIO(qr_png)).convert("RGB")
 
     w, h = LABEL_PX
