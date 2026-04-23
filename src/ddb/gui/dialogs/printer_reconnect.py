@@ -44,25 +44,50 @@ _REPAIR_SCRIPT = r"""
 import pexpect, sys, time
 
 MAC = sys.argv[1]
-bt = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=30)
+bt = pexpect.spawn("bluetoothctl", encoding="utf-8", timeout=60)
 bt.logfile_read = sys.stderr
 
 def send(c):
     bt.sendline(c); time.sleep(0.3)
 
-send(f"remove {MAC}")
-bt.expect([r"Device has been removed", r"Device does not exist", pexpect.TIMEOUT], timeout=8)
 send("power on")
 send("agent NoInputNoOutput")
 send("default-agent")
-send(f"pair {MAC}")
 
-for _ in range(6):
+# 1) Drop any stale bond on our side. OK if already absent.
+send(f"remove {MAC}")
+bt.expect([r"Device has been removed", r"Device does not exist", pexpect.TIMEOUT], timeout=8)
+
+# 2) After `remove`, BlueZ has no idea the device exists — a bare `pair`
+#    hits 'Device AC:...:xx not available'. Run a brief classic scan so
+#    the device is re-seeded from the air before we pair. Poll for the
+#    MAC's reappearance with a short timeout per tick.
+send("scan bredr")
+rediscovered = False
+for _ in range(20):  # up to ~10 s
+    idx = bt.expect([rf"NEW.*{MAC}", rf"CHG.*{MAC}", pexpect.TIMEOUT], timeout=0.5)
+    if idx in (0, 1):
+        rediscovered = True
+        break
+send("scan off")
+time.sleep(0.3)
+
+if not rediscovered:
+    sys.stderr.write(
+        f"\nprinter {MAC} was not seen by a BR/EDR scan — "
+        "is it powered on and in range?\n"
+    )
+    sys.exit(2)
+
+# 3) Pair. The printer uses SSP numeric-compare; our agent auto-confirms.
+send(f"pair {MAC}")
+for _ in range(8):
     idx = bt.expect(
         [
             r"Confirm passkey",
             r"Pairing successful",
             r"Failed to pair",
+            r"AuthenticationFailed",
             pexpect.TIMEOUT,
             pexpect.EOF,
         ],
@@ -73,7 +98,8 @@ for _ in range(6):
     elif idx == 1:
         break
     else:
-        sys.exit(1)
+        sys.stderr.write(f"\npair failed (expect idx={idx})\n")
+        sys.exit(3)
 
 send(f"trust {MAC}")
 time.sleep(0.5)
