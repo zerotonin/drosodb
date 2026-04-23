@@ -12,7 +12,7 @@ from ddb.scanner.decoder import active_backend, decode_png_bytes
 
 
 def test_decode_roundtrip() -> None:
-    raw = build_payload(vial_id=7, print_code="AB12Z", database_id="local")
+    raw = build_payload("AB12Z")
     png = make_qr_png(raw, scale=6, border=2)
     decoded = decode_png_bytes(png)
     assert raw in decoded
@@ -37,7 +37,7 @@ def test_full_label_png_decodes_same_as_naked_qr() -> None:
     """
     from ddb.labels import render_label
 
-    raw = build_payload(vial_id=42, print_code="VWM2D", database_id="local")
+    raw = build_payload("VWM2D")
     png = render_label(
         vial_id=42,
         print_code="VWM2D",
@@ -52,3 +52,29 @@ def test_full_label_png_decodes_same_as_naked_qr() -> None:
         f"label QR did not decode back to its payload using {active_backend()!r}; "
         f"got {decoded!r}"
     )
+
+
+def test_smart_decode_matches_plain_on_clean_input() -> None:
+    """The detect→crop→upscale fallback must never regress the happy path."""
+
+    import cv2
+    import numpy as np
+
+    from ddb.scanner.decoder import decode_image, decode_image_smart
+
+    raw = build_payload("SMART")
+    png = make_qr_png(raw, scale=6, border=2)
+    arr = np.frombuffer(png, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    assert raw in decode_image(img)
+    assert raw in decode_image_smart(img)
+
+
+def test_frame_sharpness_uniform_image_is_zero() -> None:
+    """A perfectly uniform image has Laplacian variance ≈ 0."""
+    import numpy as np
+
+    from ddb.scanner.decoder import frame_sharpness
+
+    flat = np.full((200, 200, 3), 128, dtype=np.uint8)
+    assert frame_sharpness(flat) < 1.0
