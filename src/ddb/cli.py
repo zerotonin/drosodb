@@ -108,6 +108,61 @@ def camera_preview(role: str) -> None:
     preview(cam.device_path, window_title=f"{role} camera")
 
 
+@camera_app.command("snapshot")
+def camera_snapshot_cmd(
+    role: str = typer.Argument(..., help="Camera role (e.g. front, back)."),
+    output: Path = typer.Option(
+        Path("/tmp/ddb_snapshot.png"), "--output", "-o", help="Where to save the frame."
+    ),
+    warmup: int = typer.Option(
+        10, "--warmup", help="Discard N frames first so auto-exposure settles."
+    ),
+) -> None:
+    """Grab one frame from a camera and try every decoder on it.
+
+    Diagnostic for "the scanner doesn't see my labels":
+      1. Point the camera at a printed label.
+      2. Run this command.
+      3. Open the saved PNG in any viewer — is the QR crisp and in-frame?
+      4. Check which (if any) decoder returned a payload.
+    """
+    import cv2 as _cv2
+
+    from ddb.camera.capture import open_capture
+    from ddb.scanner.decoder import _ZXING_AVAILABLE, _decode_opencv, _decode_zxing
+
+    cam = resolve_role(role)
+    typer.echo(f"camera: {cam.device_path} (bus {cam.bus_path})")
+    with open_capture(cam.device_path) as cap:
+        for _ in range(max(0, warmup)):
+            cap.read()
+        ok, frame = cap.read()
+        if not ok:
+            typer.echo("failed to read frame from camera", err=True)
+            raise typer.Exit(1)
+
+    _cv2.imwrite(str(output), frame)
+    h, w = frame.shape[:2]
+    typer.echo(f"saved: {output}  ({w}x{h}, BGR)")
+
+    if _ZXING_AVAILABLE:
+        zxing_hits = _decode_zxing(frame)
+        typer.echo(f"zxing-cpp : {len(zxing_hits)} payload(s)  {zxing_hits}")
+    else:
+        typer.echo("zxing-cpp : (not installed)")
+    opencv_hits = _decode_opencv(frame)
+    typer.echo(f"opencv    : {len(opencv_hits)} payload(s)  {opencv_hits}")
+
+    if not (_ZXING_AVAILABLE and zxing_hits) and not opencv_hits:
+        typer.echo(
+            "\nNeither decoder saw a QR. Typical fixes:\n"
+            "  - Move the label 10–20 cm from the lens (fixed-focus webcams).\n"
+            "  - Increase lighting; avoid reflections on the label.\n"
+            "  - Verify the role is pointed at the label: `ddb camera list`.\n"
+            "  - Open the saved PNG and check the QR is in-frame + sharp."
+        )
+
+
 def _resolve_genotype(session: Session, genotype: str) -> Genotype | None:
     """Accept a numeric id or an exact name."""
     if genotype.isdigit():
