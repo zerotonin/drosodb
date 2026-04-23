@@ -37,6 +37,11 @@ class Genotype(SQLModel, table=True):
     phenotype: str | None = None
     notes: str | None = None
     is_wildtype: bool = Field(default=False, index=True)
+    # False when every vial of this genotype is gone and we're not
+    # reconstituting — keeps the row (and its audit / lineage history)
+    # but hides it from the New-Vial dropdown and greys it in the
+    # Genotypes list. Reports still surface past vials.
+    is_in_stock: bool = Field(default=True, index=True)
     donor_strain_id: str | None = Field(default=None, index=True)
     donor_id: int | None = Field(default=None, foreign_key="donor.id")
     created_by_id: int | None = Field(default=None, foreign_key="user.id")
