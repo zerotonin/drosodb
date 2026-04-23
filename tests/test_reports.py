@@ -43,6 +43,16 @@ def test_search_by_genotype_substring(seeded: Session) -> None:
     assert all("dark" in n.lower() for n in names)
 
 
+def test_search_populates_genotype_notation(seeded: Session) -> None:
+    """Every row should carry a formatted X ; II ; III notation string."""
+    rows = search_vials(seeded, limit=10)
+    assert rows
+    for r in rows:
+        assert r.genotype_notation, f"missing notation for {r.print_code}"
+        # Expect exactly 3 slots by default (CSV has no chromosome_4 populated).
+        assert r.genotype_notation.count(" ; ") >= 2
+
+
 def test_search_by_gene_text_across_chromosomes(seeded: Session) -> None:
     # "nompC" appears on chromosome 2/3 for several genotypes from the CSV.
     rows = search_vials(seeded, gene_contains="nompC")
