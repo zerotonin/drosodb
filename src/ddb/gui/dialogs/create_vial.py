@@ -228,6 +228,25 @@ class CreateVialDialog(QDialog):
             print_png = _print_png
             printer_error_cls = _PrinterError
 
+            # Gate the batch on the printer monitor. If the printer is red,
+            # open the reconnect dialog; the user's choice maps to:
+            #   PROCEED → unchanged (do_print stays True)
+            #   SKIP    → create vials but don't print this batch
+            #   CANCEL  → abort the whole batch (no vials, no labels)
+            from ddb.gui.dialogs.printer_reconnect import (
+                ReconnectChoice,
+                ensure_printer_or_ask,
+            )
+            from ddb.gui.printer_status import shared_monitor
+
+            monitor = shared_monitor()
+            if monitor is not None:
+                choice = ensure_printer_or_ask(self, monitor.last_status)
+                if choice is ReconnectChoice.CANCEL:
+                    return
+                if choice is ReconnectChoice.SKIP:
+                    do_print = False
+
         import time as _time
 
         batch_codes: list[str] = []

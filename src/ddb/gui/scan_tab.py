@@ -35,8 +35,9 @@ from ddb.reports import VialDetail, vial_detail
 from ddb.scanner.payload import PayloadParseError, parse_payload
 
 from .camera_widget import CameraWidget
-from .dialogs import CreateVialDialog
+from .dialogs import CreateVialDialog, ReconnectChoice, ensure_printer_or_ask
 from .frame_grabber import FrameGrabber
+from .printer_status import PrinterStatusLight, shared_monitor
 
 
 class DetailPanel(QWidget):
@@ -184,6 +185,16 @@ class DetailPanel(QWidget):
                 f"No label PNG at {label_path}.\nRe-create or flip the vial to regenerate it.",
             )
             return
+
+        # Gate on the printer monitor: if the dot isn't green we open
+        # the reconnect dialog before trying to send bytes. A happy path
+        # (monitor says OK) returns immediately with PROCEED.
+        monitor = shared_monitor()
+        if monitor is not None:
+            choice = ensure_printer_or_ask(self, monitor.last_status)
+            if choice is not ReconnectChoice.PROCEED:
+                return  # SKIP and CANCEL are equivalent for a single Print click.
+
         # Lazy import so the GUI module still imports when brother_ql is absent.
         from ddb.printing.service import PrinterError, print_png
 
@@ -193,10 +204,14 @@ class DetailPanel(QWidget):
         except PrinterError as e:
             QMessageBox.critical(self, "Printer error", str(e))
             self.print_btn.setEnabled(True)
+            if monitor is not None:
+                monitor.force_probe()  # something went wrong — re-check
             return
         except (OSError, ConnectionError) as e:
             QMessageBox.critical(self, "Printer unreachable", str(e))
             self.print_btn.setEnabled(True)
+            if monitor is not None:
+                monitor.force_probe()
             return
         QMessageBox.information(self, "Printed", result.summary())
         self.print_btn.setEnabled(True)
@@ -283,6 +298,16 @@ class ScanTab(QWidget):
             controls.addSpacing(12)
             controls.addWidget(self.snapshot_btn)
         controls.addStretch()
+        # Printer status indicator — attaches to the shared monitor so
+        # the dot updates every poll cycle. Clicking the dot forces an
+        # immediate re-probe (handy when the printer was off a moment ago).
+        self.printer_light = PrinterStatusLight(show_text=True)
+        monitor = shared_monitor()
+        if monitor is not None:
+            self.printer_light.attach(monitor)
+            self.printer_light.clicked.connect(monitor.force_probe)
+        controls.addWidget(self.printer_light)
+        controls.addSpacing(12)
         controls.addWidget(self.sharpness_lbl)
         controls.addSpacing(12)
         controls.addWidget(self.status)

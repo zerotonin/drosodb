@@ -27,22 +27,30 @@ def test_gui_modules_importable() -> None:
         frame_grabber,
         genotypes_tab,
         main_window,
+        printer_status,
         reports_tab,
         scan_tab,
         settings_tab,
     )
+    from ddb.gui.dialogs import printer_reconnect  # noqa: F401
 
 
-def test_main_window_constructs_without_showing() -> None:
+def test_main_window_constructs_without_showing(monkeypatch) -> None:
     from PySide6.QtWidgets import QApplication
 
+    from ddb.config import settings
     from ddb.gui.main_window import MainWindow
+
+    # Force-disable the printer so the background status monitor (which
+    # would otherwise try a real BT probe) doesn't get started at all.
+    monkeypatch.setattr(settings, "printer_enabled", False)
 
     _qapp = QApplication.instance() or QApplication([])  # keep alive
     w = MainWindow()
     assert w.tabs.count() == 4
     titles = [w.tabs.tabText(i) for i in range(w.tabs.count())]
     assert titles == ["Scan", "Reports", "Genotypes", "Settings"]
+    assert w.printer_monitor is None, "monitor must not start when printer is disabled"
     w.close()
     # Don't quit qapp — pytest may share it with other test functions.
     del w

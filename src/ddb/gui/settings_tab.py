@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -32,6 +33,8 @@ from sqlmodel import Session, select
 
 from ddb.config import settings
 from ddb.db import engine
+from ddb.gui.dialogs.printer_reconnect import PrinterReconnectDialog
+from ddb.gui.printer_status import PrinterStatusLight, shared_monitor
 from ddb.models import Donor, OrgUnit, User
 
 
@@ -67,11 +70,56 @@ class SettingsTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_debug_group())
+        layout.addWidget(self._build_printer_group())
         layout.addWidget(self._build_camera_group())
         layout.addWidget(self._build_donor_group())
         layout.addWidget(self._build_user_group())
         layout.addWidget(self._build_unit_group())
         layout.addStretch()
+
+    # ------------------------------------------------------------------
+    # Printer status + reconnect
+    # ------------------------------------------------------------------
+
+    def _build_printer_group(self) -> QGroupBox:
+        box = QGroupBox("Printer")
+        self.printer_light = PrinterStatusLight(show_text=True)
+        monitor = shared_monitor()
+        if monitor is not None:
+            self.printer_light.attach(monitor)
+
+        self.probe_btn = QPushButton("Probe now")
+        self.reconnect_btn = QPushButton("Reconnect…")
+        self.probe_btn.clicked.connect(self._probe_now)
+        self.reconnect_btn.clicked.connect(self._open_reconnect)
+        if monitor is None:
+            # Printer disabled in settings — the reconnect dialog has
+            # nothing meaningful to offer.
+            self.probe_btn.setEnabled(False)
+            self.reconnect_btn.setEnabled(False)
+
+        row = QHBoxLayout()
+        row.addWidget(self.printer_light)
+        row.addStretch()
+        row.addWidget(self.probe_btn)
+        row.addWidget(self.reconnect_btn)
+        lo = QVBoxLayout(box)
+        lo.addLayout(row)
+        return box
+
+    def _probe_now(self) -> None:
+        monitor = shared_monitor()
+        if monitor is not None:
+            monitor.force_probe()
+
+    def _open_reconnect(self) -> None:
+        monitor = shared_monitor()
+        if monitor is None:
+            return
+        PrinterReconnectDialog(monitor.last_status, self).exec()
+        # Always re-probe after the dialog closes so the light reflects
+        # whatever state the printer is in now.
+        monitor.force_probe()
 
     # ------------------------------------------------------------------
     # Default camera for scanning

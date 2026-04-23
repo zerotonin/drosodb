@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QStatusBar, QTabWidget
 
+from ddb.config import settings
+
 from .genotypes_tab import GenotypesTab
+from .printer_status import PrinterStatusMonitor, install_shared_monitor
 from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
 from .settings_tab import SettingsTab
@@ -13,6 +16,16 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("DDB — Drosophila Vial Tracking")
         self.resize(1200, 720)
+
+        # Single printer-status poller shared across tabs + dialogs. It
+        # runs in its own QThread and publishes state changes via Qt
+        # signals. Widgets pick it up via `shared_monitor()` from
+        # `printer_status.py` rather than being passed an instance.
+        self.printer_monitor: PrinterStatusMonitor | None = None
+        if settings.printer_enabled:
+            self.printer_monitor = PrinterStatusMonitor(interval_s=60.0)
+            install_shared_monitor(self.printer_monitor)
+            self.printer_monitor.start()
 
         self.tabs = QTabWidget()
         self.scan_tab = ScanTab()
@@ -53,4 +66,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.scan_tab.shutdown()
+        if self.printer_monitor is not None:
+            self.printer_monitor.stop()
+            self.printer_monitor.wait(3000)
         super().closeEvent(event)
