@@ -43,5 +43,17 @@ class Settings(BaseSettings):
     # File backend (debugging / offline prep). Defaults to data_dir/print_jobs.
     printer_file_dir: Path | None = None
 
+    # --- GUI defaults (reduce friction when creating vials) ---
+    # The New Vial dialog pre-selects these so biologists can just pick a
+    # genotype and hit OK. Both are created on first use if they don't exist.
+    default_org_unit: str = "Geurten lab stock"
+    default_owner_username: str = "stockkeeper"
+    default_owner_full_name: str = "Stock keeper"
+
+    # Set DDB_GUI_DEBUG=1 to expose the Scan tab's "Save snapshot" button
+    # (writes the current frame + decode report under data/snapshots/).
+    # Off by default so biologists aren't confronted with debug buttons.
+    gui_debug: bool = False
+
 
 settings = Settings()
