@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from sqlmodel import Session, select
 
+from ddb.config import settings
 from ddb.db import engine
 from ddb.models import Genotype, User
 from ddb.workflows import WorkflowError, create_vial
@@ -31,6 +33,8 @@ class CreateVialResult:
     print_code: str
     label_path: str
     genotype_name: str
+    printed: bool = False
+    print_message: str | None = None
 
 
 class CreateVialDialog(QDialog):
@@ -45,15 +49,26 @@ class CreateVialDialog(QDialog):
         self.genotype_box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
 
         self.owner_box = QComboBox()
-        self.owner_box.addItem("(none)", userData=None)
+        # No "(none)" option — an owner is always required. "Who owns this
+        # stock?" is something a biologist should never skip answering,
+        # and leaving it unset means the label has no @user on it.
 
         self.notes_edit = QLineEdit()
         self.notes_edit.setPlaceholderText("Optional — e.g. 'fresh flip from stock'")
+
+        self.print_chk = QCheckBox("Print label after creating")
+        self.print_chk.setChecked(settings.printer_enabled and settings.printer_auto_print)
+        self.print_chk.setEnabled(settings.printer_enabled)
+        if not settings.printer_enabled:
+            self.print_chk.setToolTip(
+                "Enable DDB_PRINTER_ENABLED=1 (and configure the backend) in your .env."
+            )
 
         form = QFormLayout()
         form.addRow("Genotype:", self.genotype_box)
         form.addRow("Owner:", self.owner_box)
         form.addRow("Notes:", self.notes_edit)
+        form.addRow("", self.print_chk)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -73,11 +88,14 @@ class CreateVialDialog(QDialog):
             genos = s.exec(select(Genotype).order_by(Genotype.name)).all()
             users = s.exec(select(User).order_by(User.username)).all()
         for g in genos:
-            label = f"{g.name}  (id={g.id})"
-            self.genotype_box.addItem(label, userData=g.id)
+            self.genotype_box.addItem(g.name, userData=g.id)
         for u in users:
             label = f"{u.username} — {u.full_name or ''}".strip(" —")
             self.owner_box.addItem(label, userData=u.id)
+        if not users:
+            # Offer a clear hint instead of a silent empty dropdown.
+            self.owner_box.addItem("(no users — run `ddb seed-demo`)", userData=None)
+            self.owner_box.setEnabled(False)
 
     def _selected_genotype_id(self) -> int | None:
         """Prefer the combo's userData; fall back to matching the typed name."""
@@ -99,6 +117,9 @@ class CreateVialDialog(QDialog):
             QMessageBox.warning(self, "Missing genotype", "Pick a genotype from the list.")
             return
         owner_id = self.owner_box.currentData()
+        if owner_id is None:
+            QMessageBox.warning(self, "Missing owner", "Pick an owner for the vial.")
+            return
         notes = self.notes_edit.text().strip() or None
 
         try:
@@ -116,10 +137,28 @@ class CreateVialDialog(QDialog):
             QMessageBox.critical(self, "Could not create vial", str(e))
             return
 
+        printed = False
+        print_message: str | None = None
+        if self.print_chk.isChecked():
+            # Lazy import so the dialog still loads when brother_ql is absent.
+            from ddb.printing.service import PrinterError, print_png
+
+            try:
+                result = print_png(created.label_path.read_bytes())
+                printed = True
+                print_message = result.summary()
+            except (PrinterError, OSError, ConnectionError) as e:
+                # Don't fail the whole create — the vial exists, label is
+                # on disk, the user can hit Print again from DetailPanel.
+                print_message = f"Print failed: {e}"
+                QMessageBox.warning(self, "Print failed", print_message)
+
         self.result = CreateVialResult(
             vial_id=created.vial.id,
             print_code=created.vial.print_code,
             label_path=str(created.label_path),
             genotype_name=geno_name,
+            printed=printed,
+            print_message=print_message,
         )
         self.accept()

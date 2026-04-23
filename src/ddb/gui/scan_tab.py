@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 from sqlmodel import Session, select
 
+from ddb.config import settings
 from ddb.db import engine
 from ddb.lineage import export_lineage_csv
 from ddb.models import Vial
@@ -42,6 +43,7 @@ class DetailPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._current_vial_id: int | None = None
+        self._current_print_code: str | None = None
 
         self.header = QLabel("<i>No vial scanned yet.</i>")
         self.header.setTextFormat(Qt.TextFormat.RichText)
@@ -80,11 +82,13 @@ class DetailPanel(QWidget):
         btns = QHBoxLayout()
         self.flip_btn = QPushButton("Flip")
         self.decommission_btn = QPushButton("Decommission")
+        self.print_btn = QPushButton("Print")
         self.export_lineage_btn = QPushButton("Export lineage CSV…")
-        for b in (self.flip_btn, self.decommission_btn, self.export_lineage_btn):
+        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
             b.setEnabled(False)
             btns.addWidget(b)
         self.export_lineage_btn.clicked.connect(self._export_lineage)
+        self.print_btn.clicked.connect(self._print_label)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
@@ -108,7 +112,7 @@ class DetailPanel(QWidget):
         self.print_code_lbl.setText(r.print_code)
         self.status_lbl.setText(status)
         self.generation_lbl.setText(str(r.generation))
-        self.genotype_lbl.setText(f"{r.genotype_name}  (id={r.genotype_id})")
+        self.genotype_lbl.setText(r.genotype_name)
         self.phenotype_lbl.setText(r.phenotype or "-")
         self.owner_lbl.setText(f"{r.owner_username or '-'} ({r.owner_full_name or '-'})")
         self.unit_lbl.setText(r.org_unit_name or "-")
@@ -133,9 +137,13 @@ class DetailPanel(QWidget):
         self.audit.setPlainText("\n".join(lines) or "(no audit events)")
 
         self._current_vial_id = r.vial_id
+        self._current_print_code = r.print_code
         self.export_lineage_btn.setEnabled(True)
         self.flip_btn.setEnabled(r.is_active)
         self.decommission_btn.setEnabled(r.is_active)
+        # Print only if the label PNG still exists AND printer is enabled.
+        label_path = settings.data_dir / "labels" / f"{r.print_code}.png"
+        self.print_btn.setEnabled(settings.printer_enabled and label_path.exists())
 
     def _clear_fields(self) -> None:
         for lbl in (
@@ -153,8 +161,37 @@ class DetailPanel(QWidget):
             lbl.setText("-")
         self.audit.clear()
         self._current_vial_id = None
-        for b in (self.flip_btn, self.decommission_btn, self.export_lineage_btn):
+        self._current_print_code = None
+        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
             b.setEnabled(False)
+
+    def _print_label(self) -> None:
+        if self._current_print_code is None:
+            return
+        label_path = settings.data_dir / "labels" / f"{self._current_print_code}.png"
+        if not label_path.exists():
+            QMessageBox.warning(
+                self,
+                "Label missing",
+                f"No label PNG at {label_path}.\nRe-create or flip the vial to regenerate it.",
+            )
+            return
+        # Lazy import so the GUI module still imports when brother_ql is absent.
+        from ddb.printing.service import PrinterError, print_png
+
+        self.print_btn.setEnabled(False)
+        try:
+            result = print_png(label_path.read_bytes())
+        except PrinterError as e:
+            QMessageBox.critical(self, "Printer error", str(e))
+            self.print_btn.setEnabled(True)
+            return
+        except (OSError, ConnectionError) as e:
+            QMessageBox.critical(self, "Printer unreachable", str(e))
+            self.print_btn.setEnabled(True)
+            return
+        QMessageBox.information(self, "Printed", result.summary())
+        self.print_btn.setEnabled(True)
 
     def _export_lineage(self) -> None:
         if self._current_vial_id is None:
@@ -268,7 +305,10 @@ class ScanTab(QWidget):
         if dlg.exec() != dlg.DialogCode.Accepted or dlg.result is None:
             return
         r = dlg.result
-        self.status.setText(f"created {r.print_code} ({r.genotype_name}) — label: {r.label_path}")
+        suffix = " [printed]" if r.printed else ""
+        self.status.setText(
+            f"created {r.print_code} ({r.genotype_name}) — label: {r.label_path}{suffix}"
+        )
         # Pre-load the detail panel with the new vial so the user can
         # verify immediately without scanning.
         with Session(engine) as s:
