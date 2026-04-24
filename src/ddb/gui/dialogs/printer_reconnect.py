@@ -19,12 +19,16 @@ key (firmware quirks, power cycles, earlier bluetoothctl crashes) the
 kernel returns EACCES on connect. Dropping the bond lets the kernel
 fall back to an unauthenticated SPP connection, which is exactly what
 the printer wants.
+
+The heavy lifting (subprocess orchestration, daemon probing, rfkill
+escalation) lives in `ddb.printing.bt_recovery` as plain synchronous
+functions — this module only wraps them in a QThread so they don't
+block the UI, and wires results into Qt dialogs.
 """
 
 from __future__ import annotations
 
-import subprocess
-import sys
+from collections.abc import Callable
 from enum import StrEnum
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -46,6 +50,12 @@ from ddb.gui.printer_status import (
     probe_printer,
     shared_monitor,
 )
+from ddb.printing.bt_recovery import (
+    ActionResult,
+    looks_like_daemon_wedged,
+    remove_bond,
+    restart_service,
+)
 
 
 class ReconnectChoice(StrEnum):
@@ -54,258 +64,37 @@ class ReconnectChoice(StrEnum):
     CANCEL = "cancel"  # Caller should abort entirely.
 
 
-# Inline bond-removal script. Runs non-interactively under /usr/bin/python3
-# (plain stdlib subprocess — no pexpect, no interactive bluetoothctl).
-#
-# Starts with a bluetoothd health probe so a wedged daemon is surfaced
-# as a specific exit code (6) and the UI can offer 'Restart BT service'
-# instead of chasing a subsequent cryptic error.
-_REMOVE_BOND_SCRIPT = r'''
-import subprocess, sys, time
+class _BluetoothWorker(QThread):
+    """Runs a 0-arg `ActionResult`-returning callable off the GUI thread.
 
-MAC = sys.argv[1]
-
-
-def probe_bluetoothd():
-    """Return (ok, diagnostic). A freshly-restarted bluetoothd can take
-    1-2 s before it accepts DBus clients, so we retry a few times."""
-    last = None
-    for _ in range(5):
-        try:
-            p = subprocess.run(
-                ["bluetoothctl", "list"],
-                capture_output=True, text=True, timeout=4,
-            )
-        except subprocess.TimeoutExpired as e:
-            last = ("TIMEOUT", str(e), None)
-            time.sleep(1.0)
-            continue
-        combined = p.stdout + p.stderr
-        if (
-            p.returncode == 0
-            and "Waiting to connect to bluetoothd" not in combined
-            and "assertion" not in combined.lower()
-        ):
-            return True, combined
-        last = (p.stdout, p.stderr, p.returncode)
-        time.sleep(1.0)
-    return False, last
-
-
-ok, info = probe_bluetoothd()
-if not ok:
-    sys.stderr.write(
-        "\nbluetoothd on this host is not accepting connections "
-        "(wedged after an earlier bluetoothctl crash).\n"
-        "Click 'Restart BT service' in the dialog, or run "
-        "'sudo systemctl restart bluetooth' in a terminal, then retry.\n"
-        "\n--- diagnostic ---\n"
-    )
-    if isinstance(info, tuple):
-        sys.stderr.write("bluetoothctl probe returncode=" + repr(info[2]) + "\n")
-        sys.stderr.write("stdout: " + repr(info[0])[:400] + "\n")
-        sys.stderr.write("stderr: " + repr(info[1])[:400] + "\n")
-    sys.exit(6)
-
-# Drop the bond. Non-interactive `bluetoothctl remove MAC` exits 0 on
-# success, nonzero on a true failure. "Device does not exist" is already
-# the desired end state, so treat that as success too.
-try:
-    proc = subprocess.run(
-        ["bluetoothctl", "remove", MAC],
-        capture_output=True, text=True, timeout=10,
-    )
-except subprocess.TimeoutExpired:
-    sys.stderr.write("\nbluetoothctl remove timed out\n")
-    sys.exit(7)
-
-combined = proc.stdout + proc.stderr
-if proc.returncode == 0 or "Device has been removed" in combined \
-        or "Device does not exist" in combined or "not available" in combined:
-    sys.stdout.write(combined)
-    sys.exit(0)
-
-sys.stderr.write(combined)
-sys.exit(proc.returncode or 1)
-'''
-
-
-def _looks_like_daemon_wedged(tail: str) -> bool:
-    """Recognise the 'bluetoothd is wedged' signature in stderr tails.
-
-    Triggered by (a) our script exiting with rc=6 (health-check line),
-    and (b) bluetoothctl itself printing 'Waiting to connect to
-    bluetoothd' / a dbus assertion before crashing. In both cases the
-    only fix is restarting the bluetooth service."""
-    t = tail.lower()
-    return (
-        "not accepting connections" in t
-        or "waiting to connect to bluetoothd" in t
-        or ("dbus" in t and "assertion" in t)
-    )
-
-
-class _RemoveBondWorker(QThread):
-    """Runs the bond-removal script off the GUI thread."""
-
-    finished_ok = Signal(bool, str)  # (success, last-stderr-or-stdout)
-
-    def __init__(self, mac: str) -> None:
-        super().__init__()
-        self.mac = mac
-
-    def run(self) -> None:
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-c", _REMOVE_BOND_SCRIPT, self.mac],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            if proc.returncode == 0:
-                tail = proc.stdout.decode(errors="replace")[-400:]
-            else:
-                tail = proc.stderr.decode(errors="replace")[-800:]
-            self.finished_ok.emit(proc.returncode == 0, tail)
-        except Exception as e:  # noqa: BLE001
-            self.finished_ok.emit(False, f"{type(e).__name__}: {e}")
-
-
-class _BtServiceRestartWorker(QThread):
-    """Restart the bluetooth service, then wait for it to come up.
-
-    Uses plain `systemctl restart bluetooth` rather than `pkexec`: systemd's
-    polkit action (`org.freedesktop.systemd1.manage-units`) is
-    `auth_admin_keep`, so the desktop's polkit agent caches the password
-    for ~5 minutes. `pkexec` re-prompts on every call because its own
-    action `org.freedesktop.policykit.exec` is plain `auth_admin`.
-
-    If systemctl reports 'Interactive authentication required' (no polkit
-    agent available — e.g. SSH session), fall back to `pkexec` so the
-    user still gets a prompt, just a noisier one.
+    One class covers every async BT action (bond removal, service
+    restart, future additions): the caller binds arguments with a
+    lambda, we emit the result as a plain (ok, message) tuple so the
+    Qt receiver stays simple.
     """
 
     finished_ok = Signal(bool, str)
 
-    @staticmethod
-    def _run_systemctl() -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(
-            ["systemctl", "restart", "bluetooth"],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-
-    @staticmethod
-    def _run_pkexec() -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(
-            ["pkexec", "systemctl", "restart", "bluetooth"],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-
-    @staticmethod
-    def _probe_once(timeout_s: float = 4.0) -> tuple[bool, str]:
-        try:
-            p = subprocess.run(
-                ["bluetoothctl", "list"],
-                capture_output=True, text=True, timeout=timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "bluetoothctl timed out"
-        combined = p.stdout + p.stderr
-        if p.returncode == 0 and "Waiting to connect" not in combined:
-            return True, combined.strip()
-        return False, f"rc={p.returncode}: {combined.strip()[-200:]}"
-
-    def _wait_for_daemon(self, seconds: float = 8.0) -> tuple[bool, str]:
-        import time as _time
-
-        last_msg = ""
-        steps = int(seconds * 2)
-        for _ in range(steps):
-            _time.sleep(0.5)
-            ok, msg = self._probe_once()
-            last_msg = msg
-            if ok:
-                return True, "bluetoothd is accepting connections."
-        return False, last_msg or "no bluetoothctl output"
-
-    def _rfkill_cycle(self) -> bool:
-        """Kernel-level kick for a wedged USB/HCI adapter.
-        `rfkill` is usually group-accessible (plugdev / netdev) without
-        sudo on Ubuntu, so this adds no extra password prompt. Harmless
-        if the adapter wasn't actually wedged."""
-        import time as _time
-
-        try:
-            subprocess.run(["rfkill", "block", "bluetooth"], timeout=5, check=False)
-            _time.sleep(1.0)
-            subprocess.run(["rfkill", "unblock", "bluetooth"], timeout=5, check=False)
-        except FileNotFoundError:
-            return False
-        except Exception:  # noqa: BLE001
-            return False
-        return True
+    def __init__(self, fn: Callable[[], ActionResult]) -> None:
+        super().__init__()
+        self._fn = fn
 
     def run(self) -> None:
         try:
-            proc = self._run_systemctl()
-            out = (proc.stdout + proc.stderr).decode(errors="replace")
-            if proc.returncode != 0 and (
-                "Interactive authentication required" in out
-                or "Failed to connect to bus" in out
-            ):
-                # No polkit agent in this session — fall back to pkexec.
-                proc = self._run_pkexec()
-                out = (proc.stdout + proc.stderr).decode(errors="replace")
-            if proc.returncode != 0:
-                self.finished_ok.emit(False, out.strip()[-400:])
-                return
-
-            ok, msg = self._wait_for_daemon(seconds=8.0)
-            if ok:
-                self.finished_ok.emit(True, msg)
-                return
-
-            # Service is running but bluetoothctl still can't talk to it.
-            # That signature matches a kernel-level wedged HCI (seen on
-            # USB dongles after 'Failed to set mode: 0x03'). Kick the
-            # adapter with rfkill and re-probe.
-            if self._rfkill_cycle():
-                ok2, msg2 = self._wait_for_daemon(seconds=6.0)
-                if ok2:
-                    self.finished_ok.emit(
-                        True, "Recovered via rfkill cycle. " + msg2
-                    )
-                    return
-                self.finished_ok.emit(
-                    False,
-                    "systemctl restart + rfkill cycle both ran, but "
-                    "bluetoothctl still can't reach the daemon. "
-                    "Last probe: " + msg2 + "\n\n"
-                    "Physical fix: unplug and replug the Bluetooth "
-                    "adapter (or reboot).",
-                )
-            else:
-                self.finished_ok.emit(
-                    False,
-                    "Service restarted but bluetoothctl still can't "
-                    "connect, and rfkill isn't available. Last probe: "
-                    + msg,
-                )
-        except FileNotFoundError as e:
-            self.finished_ok.emit(
-                False,
-                f"{e.filename} not found — run this in a terminal instead:\n"
-                "    sudo systemctl restart bluetooth",
-            )
-        except Exception as e:  # noqa: BLE001
+            result = self._fn()
+            self.finished_ok.emit(bool(result.ok), str(result.message))
+        except Exception as e:  # noqa: BLE001 — surface any failure to the UI instead of crashing the thread
             self.finished_ok.emit(False, f"{type(e).__name__}: {e}")
 
 
 class PrinterReconnectDialog(QDialog):
+    """Modal dialog offered when the background printer monitor is red.
+
+    Owns the four recovery buttons plus a Guided-steps wizard entry
+    point. All actual BlueZ work happens in `bt_recovery`; this class
+    only renders state and dispatches worker threads.
+    """
+
     def __init__(self, status: PrinterStatus, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Printer not reachable")
@@ -313,7 +102,7 @@ class PrinterReconnectDialog(QDialog):
         self.choice: ReconnectChoice = ReconnectChoice.CANCEL
 
         self._status = status
-        self._reset: _RemoveBondWorker | None = None
+        self._worker: _BluetoothWorker | None = None
 
         # While this dialog is open we have BlueZ traffic to the printer
         # under direct user control — if the background monitor also
@@ -382,6 +171,10 @@ class PrinterReconnectDialog(QDialog):
 
         self._render_message()
 
+    # ------------------------------------------------------------------
+    # Rendering + busy-state
+    # ------------------------------------------------------------------
+
     def _render_message(self) -> None:
         headline = {
             PrinterState.UNREACHABLE: (
@@ -424,6 +217,19 @@ class PrinterReconnectDialog(QDialog):
             self.reset_btn.setEnabled(False)
             self.guided_btn.setEnabled(False)
 
+    def _start_worker(
+        self, fn: Callable[[], ActionResult], done: Callable[[bool, str], None]
+    ) -> None:
+        """Kick off a background BT action. Keeps a reference to the
+        thread so Qt doesn't GC it mid-run."""
+        self._worker = _BluetoothWorker(fn)
+        self._worker.finished_ok.connect(done)
+        self._worker.start()
+
+    # ------------------------------------------------------------------
+    # Button handlers
+    # ------------------------------------------------------------------
+
     def _on_retry(self) -> None:
         self._set_busy("Probing printer…")
         QTimer.singleShot(50, self._do_retry)
@@ -433,8 +239,6 @@ class PrinterReconnectDialog(QDialog):
         self._status = status
         self._set_busy(None)
         self._render_message()
-        from ddb.gui.printer_status import shared_monitor
-
         m = shared_monitor()
         if m is not None:
             m.force_probe()
@@ -448,15 +252,13 @@ class PrinterReconnectDialog(QDialog):
             QMessageBox.warning(self, "No MAC configured", "Set DDB_PRINTER_BLUETOOTH_MAC.")
             return
         self._set_busy("Resetting BT bond…")
-        self._reset = _RemoveBondWorker(mac)
-        self._reset.finished_ok.connect(self._on_reset_done)
-        self._reset.start()
+        self._start_worker(lambda: remove_bond(mac), self._on_reset_done)
 
     def _on_reset_done(self, ok: bool, tail: str) -> None:
         if not ok:
             self._set_busy(None)
             self._render_message()
-            if _looks_like_daemon_wedged(tail):
+            if looks_like_daemon_wedged(tail):
                 self._prompt_restart_service(tail)
                 return
             QMessageBox.warning(
@@ -483,9 +285,7 @@ class PrinterReconnectDialog(QDialog):
 
     def _on_restart_service(self) -> None:
         self._set_busy("Restarting the Bluetooth service (polkit prompt)…")
-        self._bt_restart = _BtServiceRestartWorker()
-        self._bt_restart.finished_ok.connect(self._on_restart_done)
-        self._bt_restart.start()
+        self._start_worker(restart_service, self._on_restart_done)
 
     def _on_restart_done(self, ok: bool, tail: str) -> None:
         self._set_busy(None)
@@ -495,13 +295,12 @@ class PrinterReconnectDialog(QDialog):
                 self,
                 "Bluetooth restarted",
                 "Bluetooth service restarted and the daemon is responding. "
-                "Click 'Re-pair Bluetooth' (or 'Guided steps…' if the "
+                "Click 'Reset BT bond' (or 'Guided steps…' if the "
                 "printer's BT also needs cycling).\n\n" + tail.strip()[-200:],
             )
         else:
-            # Bigger dialog with the full diagnostic — we're out of
-            # clean-software tricks at this point and the user needs to
-            # see what happened.
+            # Out of software tricks — show the user the diagnostic and
+            # point at physical recovery.
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Icon.Critical)
             msg.setWindowTitle("Restart didn't clear the wedge")
@@ -547,12 +346,11 @@ class PrinterReconnectDialog(QDialog):
 # Guided reconnect wizard
 # ----------------------------------------------------------------------
 #
-# When plain Re-pair keeps failing — typically because the printer's own
+# When Retry / Reset keep failing — typically because the printer's own
 # Bluetooth stack got wedged — the user needs a repeatable recipe:
 # power-cycle BT on the printer, give the stack time to come back,
-# *then* run the re-pair. This dialog walks them through it with
-# printer-specific instructions and a countdown for each wait step,
-# and ends by firing the same _RemoveBondWorker as the quick path.
+# then reset the bond. This dialog walks them through it with printer-
+# specific instructions and a countdown on each wait step.
 
 
 _GUIDE_STEPS: list[tuple[str, str, int]] = [
@@ -604,7 +402,7 @@ class GuidedReconnectDialog(QDialog):
         self._mac = mac
         self._step = 0
         self._wait_remaining = 0
-        self._reset: _RemoveBondWorker | None = None
+        self._worker: _BluetoothWorker | None = None
         self.reset_ok = False
 
         self._timer = QTimer(self)
@@ -709,9 +507,10 @@ class GuidedReconnectDialog(QDialog):
         self.spinner.show()
         self.tail_lbl.hide()
         self.countdown_lbl.setText("Clearing stored bond…")
-        self._reset = _RemoveBondWorker(self._mac)
-        self._reset.finished_ok.connect(self._on_reset_done)
-        self._reset.start()
+        mac = self._mac
+        self._worker = _BluetoothWorker(lambda: remove_bond(mac))
+        self._worker.finished_ok.connect(self._on_reset_done)
+        self._worker.start()
 
     def _on_reset_done(self, ok: bool, tail: str) -> None:
         self.spinner.hide()
@@ -725,7 +524,7 @@ class GuidedReconnectDialog(QDialog):
         # closing the wizard — the printer may still be coming up.
         self.back_btn.setEnabled(True)
         self.run_btn.setEnabled(True)
-        if _looks_like_daemon_wedged(tail):
+        if looks_like_daemon_wedged(tail):
             self.countdown_lbl.setText(
                 "The Bluetooth daemon is wedged — close this wizard and "
                 "click 'Restart BT service', then try again."
@@ -750,3 +549,25 @@ def ensure_printer_or_ask(parent, status: PrinterStatus) -> ReconnectChoice:
     dlg = PrinterReconnectDialog(status, parent)
     dlg.exec()
     return dlg.choice
+
+
+def check_printer_or_ask(parent) -> ReconnectChoice:
+    """Short-hand gate that reads the shared monitor itself.
+
+    Previously every print-intent call-site duplicated this block:
+
+        monitor = shared_monitor()
+        if monitor is not None:
+            choice = ensure_printer_or_ask(self, monitor.last_status)
+            ...
+
+    When the monitor is missing (printer disabled in settings), there
+    is nothing useful to ask about — the caller should proceed and let
+    the downstream print attempt raise if it fails. Callers interpret
+    the returned PROCEED / SKIP / CANCEL according to whether they're
+    gating a single print or a batch.
+    """
+    monitor = shared_monitor()
+    if monitor is None:
+        return ReconnectChoice.PROCEED
+    return ensure_printer_or_ask(parent, monitor.last_status)

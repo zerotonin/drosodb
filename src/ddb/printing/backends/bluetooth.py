@@ -20,9 +20,10 @@ import subprocess
 import time
 from pathlib import Path
 
+from ddb.printing._sidecars import sidecar_path
 from ddb.printing.status import StatusBlock, decode_status_blocks
 
-# Exit codes from the sidecar (see _SENDER_SCRIPT).
+# Exit codes from the sidecar (see _sidecars/bt_sender.py).
 _SIDECAR_RC_CONNECT_FAILED = 3
 _SIDECAR_RC_SEND_FAILED = 4
 
@@ -31,85 +32,7 @@ _SIDECAR_RC_SEND_FAILED = 4
 # a QL-820NWB — typical retry need in a batch-print scenario is 1 pause.
 _CONNECT_RETRY_BACKOFFS_S: tuple[float, ...] = (0.75, 1.5, 3.0, 6.0)
 
-# Sidecar script. Small, stdlib-only, runs under /usr/bin/python3.
-_SENDER_SCRIPT = r"""
-import json, socket, sys, time
-
-mac = sys.argv[1]
-channel = int(sys.argv[2])
-timeout = float(sys.argv[3])
-
-raster = sys.stdin.buffer.read()
-
-try:
-    s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-except AttributeError:
-    sys.stderr.write("system python lacks AF_BLUETOOTH — no BlueZ headers at build time\n")
-    sys.exit(2)
-
-s.settimeout(timeout)
-try:
-    s.connect((mac, channel))
-except OSError as e:
-    sys.stderr.write("connect failed: %s\n" % e)
-    sys.exit(3)
-
-# Stream in small chunks; some BT stacks choke on huge writes.
-try:
-    view = memoryview(raster)
-    for off in range(0, len(view), 512):
-        s.sendall(view[off:off+512])
-        time.sleep(0.01)
-except OSError as e:
-    sys.stderr.write("send failed: %s\n" % e)
-    s.close()
-    sys.exit(4)
-
-# Drain status replies.
-s.settimeout(2.0)
-buf = b""
-t0 = time.monotonic()
-while time.monotonic() - t0 < timeout:
-    try:
-        chunk = s.recv(256)
-    except TimeoutError:
-        continue
-    if not chunk:
-        break
-    buf += chunk
-    # Terminate early if we've seen a phase-back-to-waiting or an error block.
-    i = 0
-    terminal = False
-    while i + 32 <= len(buf):
-        if buf[i] == 0x80:
-            blk = buf[i:i+32]
-            status_type = blk[18]
-            phase_type = blk[19]
-            err1, err2 = blk[8], blk[9]
-            if err1 or err2 or status_type == 0x02:
-                terminal = True
-                break
-            if status_type == 0x06 and phase_type == 0x00:
-                terminal = True
-                break
-            i += 32
-        else:
-            i += 1
-    if terminal:
-        time.sleep(0.2)
-        try:
-            extra = s.recv(256)
-            if extra:
-                buf += extra
-        except (TimeoutError, OSError):
-            pass
-        break
-s.close()
-
-# Write raw hex so the parent can parse with the normal decoder.
-sys.stdout.write(json.dumps({"hex": buf.hex()}))
-sys.stdout.write("\n")
-"""
+_SENDER_SCRIPT_PATH = sidecar_path("bt_sender.py")
 
 
 class BluetoothRFCOMMBackend:
@@ -148,8 +71,7 @@ class BluetoothRFCOMMBackend:
             proc = subprocess.run(
                 [
                     str(self.system_python),
-                    "-c",
-                    _SENDER_SCRIPT,
+                    str(_SENDER_SCRIPT_PATH),
                     self.mac,
                     str(self.channel),
                     str(timeout),
