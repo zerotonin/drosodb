@@ -4,10 +4,20 @@ Thin wrapper over `ddb.workflows.create_vial`. All the interesting logic
 (print-code generation, audit, label rendering) lives in the backend.
 Defaults (org unit, stock keeper) are pulled from `Settings` so the
 biologist only has to pick a genotype and hit OK in the common case.
+
+`_on_ok` used to be a 130-line block that mixed form validation,
+printer gating, a batch loop, error handling, and result-building.
+It is now a four-step orchestrator:
+    inputs   = _resolve_inputs()
+    do_print = _gate_printer(inputs.do_print)
+    outcome  = _run_batch(inputs, do_print=do_print)
+    result   = _build_result(inputs, outcome, do_print=do_print)
+Each step has a single responsibility and a dataclass for its I/O.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt
@@ -27,6 +37,7 @@ from sqlmodel import Session, select
 
 from ddb.config import settings
 from ddb.db import engine
+from ddb.gui.dialogs.printer_reconnect import ReconnectChoice, check_printer_or_ask
 from ddb.models import Genotype, OrgUnit, User
 from ddb.workflows import WorkflowError, create_vial
 
@@ -47,6 +58,33 @@ class CreateVialResult:
     batch_print_codes: list[str] = field(default_factory=list)
     printed_count: int = 0
     failed_count: int = 0
+
+
+@dataclass(frozen=True)
+class _Inputs:
+    """Validated values pulled off the form, ready for the workflow call."""
+
+    genotype_id: int
+    owner_id: int
+    org_unit_id: int | None
+    notes: str | None
+    count: int
+    do_print: bool
+
+
+@dataclass
+class _BatchOutcome:
+    """Accumulator passed through the batch loop so per-iteration state
+    and final-result state live in one place."""
+
+    codes: list[str] = field(default_factory=list)
+    last_vial_id: int = 0
+    last_print_code: str = ""
+    last_label_path: str = ""
+    genotype_name: str = ""
+    printed_count: int = 0
+    failed_count: int = 0
+    first_print_error: str | None = None
 
 
 def _genotype_display(g: Genotype) -> str:
@@ -197,10 +235,29 @@ class CreateVialDialog(QDialog):
             return by_name.id if by_name else None
 
     # ------------------------------------------------------------------
-    # Submit
+    # Submit — four-step orchestrator
     # ------------------------------------------------------------------
 
     def _on_ok(self) -> None:
+        inputs = self._resolve_inputs()
+        if inputs is None:
+            return
+
+        do_print = self._gate_printer(inputs.do_print)
+        if do_print is None:
+            return  # user hit CANCEL at the reconnect dialog
+
+        outcome = self._run_batch(inputs, do_print=do_print)
+        if not outcome.codes:
+            return  # batch failed before the first vial was persisted
+
+        self._report_print_failures(outcome, inputs.count)
+        self.result = self._build_result(inputs, outcome, do_print=do_print)
+        self.accept()
+
+    # --- step 1: resolve form values ----------------------------------
+
+    def _resolve_inputs(self) -> _Inputs | None:
         geno_id = self._selected_genotype_id()
         if geno_id is None:
             QMessageBox.warning(
@@ -208,19 +265,52 @@ class CreateVialDialog(QDialog):
                 "Missing genotype",
                 "Pick a genotype from the list, or type its name / donor#id.",
             )
-            return
+            return None
         owner_id = self.owner_box.currentData()
         if owner_id is None:
             QMessageBox.warning(self, "Missing owner", "Pick an owner for the vial.")
-            return
-        org_unit_id = self.unit_box.currentData()  # may be None; workflow accepts it
-        notes = self.notes_edit.text().strip() or None
-        count = int(self.count_spin.value())
+            return None
+        return _Inputs(
+            genotype_id=geno_id,
+            owner_id=owner_id,
+            org_unit_id=self.unit_box.currentData(),  # may be None; workflow accepts it
+            notes=self.notes_edit.text().strip() or None,
+            count=int(self.count_spin.value()),
+            do_print=self.print_chk.isChecked(),
+        )
 
+    # --- step 2: printer gate -----------------------------------------
+
+    def _gate_printer(self, wants_print: bool) -> bool | None:
+        """Return whether the batch should actually print.
+
+        Returns:
+            True  — go print.
+            False — create vials but don't print (user chose SKIP, or
+                    printing wasn't requested in the first place).
+            None  — user chose CANCEL; caller should abort the whole
+                    batch.
+        """
+        if not wants_print:
+            return False
+        choice = check_printer_or_ask(self)
+        if choice is ReconnectChoice.CANCEL:
+            return None
+        return choice is not ReconnectChoice.SKIP
+
+    # --- step 3: batch loop -------------------------------------------
+
+    def _run_batch(self, inputs: _Inputs, *, do_print: bool) -> _BatchOutcome:
+        """Create `inputs.count` vials; optionally print each label.
+
+        Prints are best-effort: a failure (errno 16 retries aside) marks
+        one vial as un-printed but does not stop the batch — the DB row
+        is already persisted and the user can re-print later.
+        """
+        outcome = _BatchOutcome()
         # Lazy-import printing only when actually needed.
-        print_png = None
         printer_error_cls: type | None = None
-        do_print = self.print_chk.isChecked()
+        print_png = None
         if do_print:
             from ddb.printing.service import PrinterError as _PrinterError
             from ddb.printing.service import print_png as _print_png
@@ -228,104 +318,98 @@ class CreateVialDialog(QDialog):
             print_png = _print_png
             printer_error_cls = _PrinterError
 
-            # Gate the batch on the printer monitor. If the printer is red,
-            # open the reconnect dialog; the user's choice maps to:
-            #   PROCEED → unchanged (do_print stays True)
-            #   SKIP    → create vials but don't print this batch
-            #   CANCEL  → abort the whole batch (no vials, no labels)
-            from ddb.gui.dialogs.printer_reconnect import (
-                ReconnectChoice,
-                ensure_printer_or_ask,
-            )
-            from ddb.gui.printer_status import shared_monitor
-
-            monitor = shared_monitor()
-            if monitor is not None:
-                choice = ensure_printer_or_ask(self, monitor.last_status)
-                if choice is ReconnectChoice.CANCEL:
-                    return
-                if choice is ReconnectChoice.SKIP:
-                    do_print = False
-
-        import time as _time
-
-        batch_codes: list[str] = []
-        printed_count = 0
-        failed_count = 0
-        first_print_error: str | None = None
-        last_created = None
-        last_label_path: str = ""
-        geno_name = ""
-
         try:
-            for i in range(count):
-                with Session(engine) as s:
-                    created = create_vial(
-                        s,
-                        genotype_id=geno_id,
-                        actor_id=owner_id,
-                        owner_id=owner_id,
-                        org_unit_id=org_unit_id,
-                        notes=notes,
-                    )
-                    if not geno_name:
-                        geno = s.get(Genotype, geno_id)
-                        geno_name = geno.name if geno else ""
-                batch_codes.append(created.vial.print_code)
-                last_created = created
-                last_label_path = str(created.label_path)
+            for i in range(inputs.count):
+                created = self._create_one(inputs, outcome)
+                outcome.codes.append(created.vial.print_code)
+                outcome.last_vial_id = created.vial.id
+                outcome.last_print_code = created.vial.print_code
+                outcome.last_label_path = str(created.label_path)
 
-                if do_print and print_png is not None:
-                    try:
-                        print_png(created.label_path.read_bytes())
-                        printed_count += 1
-                    except (printer_error_cls, OSError, ConnectionError) as e:  # type: ignore[misc]
-                        # Keep going through the batch on print failures —
-                        # the DB rows are already there, the user can hit
-                        # Print on the detail panel or re-run.
-                        failed_count += 1
-                        if first_print_error is None:
-                            first_print_error = str(e)
+                if do_print and print_png is not None and printer_error_cls is not None:
+                    self._try_print(
+                        created.label_path.read_bytes(),
+                        print_png=print_png,
+                        printer_error_cls=printer_error_cls,
+                        outcome=outcome,
+                    )
                     # Settle between prints (but not after the last one).
-                    if i < count - 1:
-                        _time.sleep(_BATCH_PRINT_SETTLE_S)
+                    if i < inputs.count - 1:
+                        time.sleep(_BATCH_PRINT_SETTLE_S)
         except WorkflowError as e:
             QMessageBox.critical(
                 self,
                 "Could not create vial",
-                f"{e}\n\nCreated {len(batch_codes)} of {count} before the error.",
+                f"{e}\n\nCreated {len(outcome.codes)} of {inputs.count} before the error.",
             )
-            if not batch_codes:
-                return
-            # Partial success: fall through and report what did land.
+        return outcome
 
-        if failed_count > 0 and first_print_error is not None:
-            msg = (
-                f"{failed_count} of {count} labels failed to print.\n\n"
-                f"First error: {first_print_error}\n\n"
-                "Vials are in the database; you can re-print from the Scan tab's "
-                "Detail panel."
+    def _create_one(self, inputs: _Inputs, outcome: _BatchOutcome):
+        """Persist one vial + remember the genotype name for the summary."""
+        with Session(engine) as s:
+            created = create_vial(
+                s,
+                genotype_id=inputs.genotype_id,
+                actor_id=inputs.owner_id,
+                owner_id=inputs.owner_id,
+                org_unit_id=inputs.org_unit_id,
+                notes=inputs.notes,
             )
-            QMessageBox.warning(self, "Print partially failed", msg)
+            if not outcome.genotype_name:
+                geno = s.get(Genotype, inputs.genotype_id)
+                outcome.genotype_name = geno.name if geno else ""
+        return created
 
-        assert last_created is not None  # batch_codes is non-empty here
-        self.result = CreateVialResult(
-            vial_id=last_created.vial.id,
-            print_code=last_created.vial.print_code,
-            label_path=last_label_path,
-            genotype_name=geno_name,
-            printed=printed_count > 0,
+    @staticmethod
+    def _try_print(
+        label_bytes: bytes,
+        *,
+        print_png,
+        printer_error_cls: type,
+        outcome: _BatchOutcome,
+    ) -> None:
+        """Send one label; record success or first-error on the outcome."""
+        try:
+            print_png(label_bytes)
+            outcome.printed_count += 1
+        except (printer_error_cls, OSError, ConnectionError) as e:
+            outcome.failed_count += 1
+            if outcome.first_print_error is None:
+                outcome.first_print_error = str(e)
+
+    # --- step 4: report + result --------------------------------------
+
+    def _report_print_failures(self, outcome: _BatchOutcome, total: int) -> None:
+        if outcome.failed_count == 0 or outcome.first_print_error is None:
+            return
+        QMessageBox.warning(
+            self,
+            "Print partially failed",
+            f"{outcome.failed_count} of {total} labels failed to print.\n\n"
+            f"First error: {outcome.first_print_error}\n\n"
+            "Vials are in the database; you can re-print from the Scan tab's "
+            "Detail panel.",
+        )
+
+    def _build_result(
+        self, inputs: _Inputs, outcome: _BatchOutcome, *, do_print: bool
+    ) -> CreateVialResult:
+        return CreateVialResult(
+            vial_id=outcome.last_vial_id,
+            print_code=outcome.last_print_code,
+            label_path=outcome.last_label_path,
+            genotype_name=outcome.genotype_name,
+            printed=outcome.printed_count > 0,
             print_message=(
                 None
                 if not do_print
-                else f"{printed_count}/{count} printed"
-                + (f" ({failed_count} failed)" if failed_count else "")
+                else f"{outcome.printed_count}/{inputs.count} printed"
+                + (f" ({outcome.failed_count} failed)" if outcome.failed_count else "")
             ),
-            batch_print_codes=batch_codes,
-            printed_count=printed_count,
-            failed_count=failed_count,
+            batch_print_codes=outcome.codes,
+            printed_count=outcome.printed_count,
+            failed_count=outcome.failed_count,
         )
-        self.accept()
 
 
 # ----------------------------------------------------------------------

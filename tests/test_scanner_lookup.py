@@ -7,6 +7,7 @@ from ddb.config import settings
 from ddb.models import Genotype
 from ddb.qr import build_payload
 from ddb.scanner import lookup_by_payload, parse_payload
+from ddb.scanner.lookup import lookup_detail_by_payload
 from ddb.scanner.payload import ParsedPayload
 from ddb.workflows import create_vial
 
@@ -79,3 +80,20 @@ def test_lookup_legacy_flags_foreign_database(session: Session) -> None:
     assert result is not None
     assert result.print_code_matches
     assert not result.database_matches
+
+
+# --- lookup_detail_by_payload (the higher-level helper used by the GUI) ---
+
+
+def test_lookup_detail_returns_vial_detail(session: Session) -> None:
+    vial = _make_vial(session)
+    parsed = parse_payload(build_payload(vial.print_code))
+    detail = lookup_detail_by_payload(session, parsed)
+    assert detail is not None
+    assert detail.row.vial_id == vial.id
+    assert detail.row.print_code == vial.print_code
+
+
+def test_lookup_detail_returns_none_for_unknown_payload(session: Session) -> None:
+    parsed = parse_payload(build_payload("NOPE0"))
+    assert lookup_detail_by_payload(session, parsed) is None

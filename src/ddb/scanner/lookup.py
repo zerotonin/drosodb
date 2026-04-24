@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 
 from ddb.config import settings
 from ddb.models import Vial
+from ddb.reports import VialDetail, vial_detail
 from ddb.scanner.payload import ParsedPayload
 
 
@@ -67,3 +68,18 @@ def lookup_by_payload(session: Session, parsed: ParsedPayload) -> LookupResult |
         print_code_matches=(vial.print_code == parsed.print_code),
         database_matches=database_matches,
     )
+
+
+def lookup_detail_by_payload(session: Session, parsed: ParsedPayload) -> VialDetail | None:
+    """One-call bridge from a parsed payload to a fully-populated VialDetail.
+
+    The Scan tab's preview thread and manual-entry handler both want
+    the same thing: "given a payload, give me everything needed to
+    paint the detail panel, or None if the payload isn't known here."
+    Compose `lookup_by_payload` + `vial_detail` so neither call site
+    duplicates the select / fallback logic.
+    """
+    found = lookup_by_payload(session, parsed)
+    if found is None:
+        return None
+    return vial_detail(session, found.vial.id)

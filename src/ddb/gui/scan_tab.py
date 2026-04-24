@@ -1,7 +1,10 @@
 """Scan tab — camera preview on the left, vial detail on the right.
 
-Start/Stop controls the FrameGrabber thread. Every decoded payload triggers
-a DB lookup via `vial_detail` and repaints the right-hand panel.
+Start/Stop controls the FrameGrabber thread. Every decoded payload
+triggers a DB lookup via `lookup_detail_by_payload` and repaints the
+right-hand panel. The detail panel itself (with all of its per-vial
+buttons) lives in `ddb.gui.vial_detail_panel` so this tab stays focused
+on scanning controls and status rendering.
 """
 
 from __future__ import annotations
@@ -9,229 +12,41 @@ from __future__ import annotations
 from datetime import UTC
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QComboBox,
-    QFileDialog,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from ddb.config import settings
 from ddb.db import engine
-from ddb.lineage import export_lineage_csv
-from ddb.models import Vial
-from ddb.reports import VialDetail, vial_detail
+from ddb.reports import vial_detail
+from ddb.scanner.lookup import lookup_detail_by_payload
 from ddb.scanner.payload import PayloadParseError, parse_payload
 
 from .camera_widget import CameraWidget
-from .dialogs import CreateVialDialog, ReconnectChoice, ensure_printer_or_ask
+from .dialogs import CreateVialDialog
 from .frame_grabber import FrameGrabber
 from .printer_status import PrinterStatusLight, shared_monitor
-
-
-class DetailPanel(QWidget):
-    """The right-hand panel. All fields update when a new vial is loaded."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._current_vial_id: int | None = None
-        self._current_print_code: str | None = None
-
-        self.header = QLabel("<i>No vial scanned yet.</i>")
-        self.header.setTextFormat(Qt.TextFormat.RichText)
-
-        form = QFormLayout()
-        self.print_code_lbl = QLabel("-")
-        self.status_lbl = QLabel("-")
-        self.generation_lbl = QLabel("-")
-        self.genotype_lbl = QLabel("-")
-        self.notation_lbl = QLabel("-")
-        self.notation_lbl.setWordWrap(True)
-        self.notation_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.phenotype_lbl = QLabel("-")
-        self.owner_lbl = QLabel("-")
-        self.unit_lbl = QLabel("-")
-        self.donor_lbl = QLabel("-")
-        self.created_lbl = QLabel("-")
-        self.lineage_lbl = QLabel("-")
-        form.addRow("Print code:", self.print_code_lbl)
-        form.addRow("Status:", self.status_lbl)
-        form.addRow("Generation:", self.generation_lbl)
-        form.addRow("Genotype:", self.genotype_lbl)
-        form.addRow("Notation:", self.notation_lbl)
-        form.addRow("Phenotype:", self.phenotype_lbl)
-        form.addRow("Owner:", self.owner_lbl)
-        form.addRow("Org unit:", self.unit_lbl)
-        form.addRow("Donor:", self.donor_lbl)
-        form.addRow("Created:", self.created_lbl)
-        form.addRow("Lineage:", self.lineage_lbl)
-        form_box = QGroupBox("Vial")
-        form_box.setLayout(form)
-
-        self.audit = QTextEdit(readOnly=True)
-        self.audit.setMaximumHeight(160)
-        audit_box = QGroupBox("Audit trail")
-        audit_l = QVBoxLayout()
-        audit_l.addWidget(self.audit)
-        audit_box.setLayout(audit_l)
-
-        btns = QHBoxLayout()
-        self.flip_btn = QPushButton("Flip")
-        self.decommission_btn = QPushButton("Decommission")
-        self.print_btn = QPushButton("Print")
-        self.export_lineage_btn = QPushButton("Export lineage CSV…")
-        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
-            b.setEnabled(False)
-            btns.addWidget(b)
-        self.export_lineage_btn.clicked.connect(self._export_lineage)
-        self.print_btn.clicked.connect(self._print_label)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.header)
-        layout.addWidget(form_box)
-        layout.addWidget(audit_box)
-        layout.addLayout(btns)
-        layout.addStretch()
-
-    @Slot(object, str)
-    def show_detail(self, detail: VialDetail | None, raw: str) -> None:
-        if detail is None:
-            self.header.setText(
-                f"<b>Unknown payload</b> — not in this database:<br><code>{raw}</code>"
-            )
-            self._clear_fields()
-            return
-
-        r = detail.row
-        status = "ACTIVE" if r.is_active else "decommissioned"
-        self.header.setText(f"<h2>{r.print_code}</h2>")
-        self.print_code_lbl.setText(r.print_code)
-        self.status_lbl.setText(status)
-        self.generation_lbl.setText(str(r.generation))
-        self.genotype_lbl.setText(r.genotype_name)
-        self.notation_lbl.setText(r.genotype_notation)
-        self.phenotype_lbl.setText(r.phenotype or "-")
-        self.owner_lbl.setText(f"{r.owner_username or '-'} ({r.owner_full_name or '-'})")
-        self.unit_lbl.setText(r.org_unit_name or "-")
-        self.donor_lbl.setText(f"{r.donor_name or '-'}  strain#{r.donor_strain_id or '-'}")
-        self.created_lbl.setText(r.created_at.isoformat(timespec="seconds"))
-
-        lineage_parts: list[str] = []
-        if detail.parent_flip_print_code:
-            lineage_parts.append(f"← {detail.parent_flip_print_code}")
-        if detail.parent_cross_print_codes:
-            lineage_parts.append("× " + ", ".join(detail.parent_cross_print_codes))
-        if detail.child_flip_print_codes:
-            lineage_parts.append("→ " + ", ".join(detail.child_flip_print_codes))
-        self.lineage_lbl.setText(" · ".join(lineage_parts) if lineage_parts else "-")
-
-        lines = []
-        for a in detail.audit:
-            lines.append(
-                f"{a.created_at.isoformat(timespec='seconds')}  "
-                f"{a.action:<14} by {a.actor_username or '-'}"
-            )
-        self.audit.setPlainText("\n".join(lines) or "(no audit events)")
-
-        self._current_vial_id = r.vial_id
-        self._current_print_code = r.print_code
-        self.export_lineage_btn.setEnabled(True)
-        self.flip_btn.setEnabled(r.is_active)
-        self.decommission_btn.setEnabled(r.is_active)
-        # Print only if the label PNG still exists AND printer is enabled.
-        label_path = settings.data_dir / "labels" / f"{r.print_code}.png"
-        self.print_btn.setEnabled(settings.printer_enabled and label_path.exists())
-
-    def _clear_fields(self) -> None:
-        for lbl in (
-            self.print_code_lbl,
-            self.status_lbl,
-            self.generation_lbl,
-            self.genotype_lbl,
-            self.notation_lbl,
-            self.phenotype_lbl,
-            self.owner_lbl,
-            self.unit_lbl,
-            self.donor_lbl,
-            self.created_lbl,
-            self.lineage_lbl,
-        ):
-            lbl.setText("-")
-        self.audit.clear()
-        self._current_vial_id = None
-        self._current_print_code = None
-        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
-            b.setEnabled(False)
-
-    def _print_label(self) -> None:
-        if self._current_print_code is None:
-            return
-        label_path = settings.data_dir / "labels" / f"{self._current_print_code}.png"
-        if not label_path.exists():
-            QMessageBox.warning(
-                self,
-                "Label missing",
-                f"No label PNG at {label_path}.\nRe-create or flip the vial to regenerate it.",
-            )
-            return
-
-        # Gate on the printer monitor: if the dot isn't green we open
-        # the reconnect dialog before trying to send bytes. A happy path
-        # (monitor says OK) returns immediately with PROCEED.
-        monitor = shared_monitor()
-        if monitor is not None:
-            choice = ensure_printer_or_ask(self, monitor.last_status)
-            if choice is not ReconnectChoice.PROCEED:
-                return  # SKIP and CANCEL are equivalent for a single Print click.
-
-        # Lazy import so the GUI module still imports when brother_ql is absent.
-        from ddb.printing.service import PrinterError, print_png
-
-        self.print_btn.setEnabled(False)
-        try:
-            result = print_png(label_path.read_bytes())
-        except PrinterError as e:
-            QMessageBox.critical(self, "Printer error", str(e))
-            self.print_btn.setEnabled(True)
-            if monitor is not None:
-                monitor.force_probe()  # something went wrong — re-check
-            return
-        except (OSError, ConnectionError) as e:
-            QMessageBox.critical(self, "Printer unreachable", str(e))
-            self.print_btn.setEnabled(True)
-            if monitor is not None:
-                monitor.force_probe()
-            return
-        QMessageBox.information(self, "Printed", result.summary())
-        self.print_btn.setEnabled(True)
-
-    def _export_lineage(self) -> None:
-        if self._current_vial_id is None:
-            return
-        with Session(engine) as s:
-            v = s.get(Vial, self._current_vial_id)
-            if v is None:
-                return
-            suggested = f"lineage_{v.print_code}.csv"
-            out, _ = QFileDialog.getSaveFileName(self, "Save lineage CSV", suggested, "CSV (*.csv)")
-            if not out:
-                return
-            path = export_lineage_csv(s, v.id, Path(out))
-        QMessageBox.information(self, "Lineage exported", f"Wrote {path}")
+from .vial_detail_panel import DetailPanel
 
 
 class ScanTab(QWidget):
+    """Scan-mode tab: camera controls + printer light + vial detail panel.
+
+    Owns the FrameGrabber lifecycle. All DB lookups and label printing
+    live in helpers (`lookup_detail_by_payload`, `DetailPanel`); this
+    class is just the Qt glue.
+    """
+
     def __init__(self) -> None:
         super().__init__()
         self._grabber: FrameGrabber | None = None
@@ -325,6 +140,10 @@ class ScanTab(QWidget):
         outer.addLayout(controls)
         outer.addLayout(row)
 
+    # ------------------------------------------------------------------
+    # FrameGrabber lifecycle
+    # ------------------------------------------------------------------
+
     def _start(self) -> None:
         if self._grabber is not None:
             return
@@ -368,6 +187,10 @@ class ScanTab(QWidget):
         """Tell the user (briefly) that the grabber auto-saved a sharpness peak."""
         self.status.setText(f"peak frame saved: {Path(path).name}")
 
+    # ------------------------------------------------------------------
+    # Payload → vial detail
+    # ------------------------------------------------------------------
+
     def _manual_lookup(self) -> None:
         """Load a vial from a hand-typed print code (QR-scanner fallback)."""
         code = self.code_edit.text().strip().upper()
@@ -380,8 +203,7 @@ class ScanTab(QWidget):
             QMessageBox.warning(self, "Bad code", f"{code!r} is not a valid print code: {e}")
             return
         with Session(engine) as s:
-            v = s.exec(select(Vial).where(Vial.print_code == parsed.print_code)).first()
-            detail = vial_detail(s, v.id) if v else None
+            detail = lookup_detail_by_payload(s, parsed)
         if detail is None:
             QMessageBox.information(
                 self, "Not found", f"No vial with print code {code!r} in the database."
@@ -390,6 +212,28 @@ class ScanTab(QWidget):
         self.detail.show_detail(detail, synthetic)
         self.status.setText(f"loaded {code} by manual entry")
         self.code_edit.clear()
+
+    @Slot(str)
+    def _on_payload(self, raw: str) -> None:
+        try:
+            parsed = parse_payload(raw)
+        except PayloadParseError:
+            self.status.setText(f"ignored non-ddb payload: {raw[:40]}")
+            return
+
+        with Session(engine) as s:
+            detail = lookup_detail_by_payload(s, parsed)
+
+        self.detail.show_detail(detail, raw)
+        if detail is None:
+            self.status.setText(f"scanned {parsed.print_code} — not in DB")
+        else:
+            self.status.setText(f"last scan: {parsed.print_code}")
+
+    @Slot(str)
+    def _on_error(self, msg: str) -> None:
+        QMessageBox.warning(self, "Scanner error", msg)
+        self.status.setText(f"error: {msg}")
 
     @Slot(float)
     def _set_sharpness(self, value: float | None) -> None:
@@ -407,32 +251,9 @@ class ScanTab(QWidget):
         self.sharpness_lbl.setText(f"sharpness {value:,.0f}")
         self.sharpness_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
 
-    @Slot(str)
-    def _on_payload(self, raw: str) -> None:
-        try:
-            parsed = parse_payload(raw)
-        except PayloadParseError:
-            self.status.setText(f"ignored non-ddb payload: {raw[:40]}")
-            return
-
-        # Look up by print_code — works for both compact (`DDB:<pc>`) and
-        # legacy (`ddb:1:vial:<id>?pc=<pc>&db=<db>`) payloads.
-        with Session(engine) as s:
-            v = s.exec(select(Vial).where(Vial.print_code == parsed.print_code)).first()
-            if v is None and parsed.vial_id is not None:
-                v = s.get(Vial, parsed.vial_id)  # legacy-flipped code fallback
-            detail = vial_detail(s, v.id) if v else None
-
-        self.detail.show_detail(detail, raw)
-        if detail is None:
-            self.status.setText(f"scanned {parsed.print_code} — not in DB")
-        else:
-            self.status.setText(f"last scan: {parsed.print_code}")
-
-    @Slot(str)
-    def _on_error(self, msg: str) -> None:
-        QMessageBox.warning(self, "Scanner error", msg)
-        self.status.setText(f"error: {msg}")
+    # ------------------------------------------------------------------
+    # Debug snapshot
+    # ------------------------------------------------------------------
 
     def _save_snapshot(self) -> None:
         """Debug: dump the current frame + run every decoder on it.
@@ -507,6 +328,10 @@ class ScanTab(QWidget):
                 lines.append("  • QR is not obscured by fingers / reflections")
                 lines.append("  • correct camera role is selected")
         QMessageBox.information(self, "Snapshot saved", "\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # New-vial dialog
+    # ------------------------------------------------------------------
 
     def _open_new_vial_dialog(self) -> None:
         dlg = CreateVialDialog(self)
