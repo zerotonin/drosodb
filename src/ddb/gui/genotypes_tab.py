@@ -29,7 +29,8 @@ from sqlmodel import Session, select
 from ddb.config import settings
 from ddb.db import engine
 from ddb.genotype import format_notation
-from ddb.gui.dialogs import CreateGenotypeDialog
+from ddb.gui.dialogs import CreateGenotypeDialog, ImportGenotypeDialog
+from ddb.gui.dirty_tracker import DirtyTracker
 from ddb.gui.genotype_form import GenotypeForm, ensure_donor
 from ddb.models import Genotype, User, Vial
 from ddb.workflows import (
@@ -53,12 +54,20 @@ class GenotypesTab(QWidget):
         self.list.currentItemChanged.connect(self._on_selection_changed)
 
         self.new_btn = QPushButton("New")
+        self.import_btn = QPushButton("Import…")
+        self.import_btn.setToolTip(
+            "Import a genotype by stock-center ID (BDSC, VDRC, Kyoto, …). "
+            "Requires the FlyBase catalog — enable it in Settings."
+        )
+        self.import_btn.setVisible(settings.flybase_enabled)
         self.refresh_btn = QPushButton("Reload")
         self.new_btn.clicked.connect(self._open_new_dialog)
+        self.import_btn.clicked.connect(self._open_import_dialog)
         self.refresh_btn.clicked.connect(self.reload)
 
         left_btns = QHBoxLayout()
         left_btns.addWidget(self.new_btn)
+        left_btns.addWidget(self.import_btn)
         left_btns.addWidget(self.refresh_btn)
         left_btns.addStretch()
 
@@ -70,19 +79,26 @@ class GenotypesTab(QWidget):
 
         # --- Right: editable detail form using the shared GenotypeForm -----
         self.form = GenotypeForm(self)
-        # Dirty-marking: any text change or checkbox toggle enables Save.
-        self.form.name_edit.textChanged.connect(self._mark_dirty)
-        self.form.donor_strain_edit.textChanged.connect(self._mark_dirty)
-        self.form.chrom_x_edit.textChanged.connect(self._mark_dirty)
-        self.form.chrom_2_edit.textChanged.connect(self._mark_dirty)
-        self.form.chrom_3_edit.textChanged.connect(self._mark_dirty)
-        self.form.chrom_4_edit.textChanged.connect(self._mark_dirty)
-        self.form.chrom_y_edit.textChanged.connect(self._mark_dirty)
-        self.form.phenotype_edit.textChanged.connect(self._mark_dirty)
-        self.form.notes_edit.textChanged.connect(self._mark_dirty)
-        self.form.new_donor_edit.textChanged.connect(self._mark_dirty)
-        self.form.donor_box.currentIndexChanged.connect(lambda _i: self._mark_dirty(""))
-        self.form.wildtype_chk.toggled.connect(lambda _b: self._mark_dirty(""))
+        # Dirty-marking: any edit to a watched widget enables Save/Revert.
+        # Keep this list synced with GenotypeForm.values() so there's no
+        # "I edited it but Save didn't light up" surprise. The callback
+        # checks `_suppress_dirty` itself so programmatic populate-from
+        # doesn't mark the form dirty.
+        self._dirty = DirtyTracker(self._mark_dirty)
+        self._dirty.watch(
+            self.form.name_edit,
+            self.form.donor_strain_edit,
+            self.form.chrom_x_edit,
+            self.form.chrom_2_edit,
+            self.form.chrom_3_edit,
+            self.form.chrom_4_edit,
+            self.form.chrom_y_edit,
+            self.form.phenotype_edit,
+            self.form.notes_edit,
+            self.form.new_donor_edit,
+            self.form.donor_box,
+            self.form.wildtype_chk,
+        )
 
         self.meta_lbl = QLabel("<i>Select a genotype on the left or click New.</i>")
         self.meta_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -226,7 +242,7 @@ class GenotypesTab(QWidget):
     # Dirty-state + save
     # ------------------------------------------------------------------
 
-    def _mark_dirty(self, _text: str) -> None:
+    def _mark_dirty(self) -> None:
         if self._suppress_dirty or self._current_id is None:
             return
         self._set_dirty(True)
@@ -373,3 +389,20 @@ class GenotypesTab(QWidget):
         # Select the newly-created row after reload.
         self._current_id = dlg.result.genotype_id
         self.reload()
+
+    def _open_import_dialog(self) -> None:
+        """Open the stock-center import dialog; react to whichever of its
+        two outcomes fires (created new / opened existing)."""
+        dlg = ImportGenotypeDialog(self)
+        dlg.exec()
+        if dlg.created_genotype_id is not None:
+            self._current_id = dlg.created_genotype_id
+            self.reload()
+        elif dlg.open_existing_genotype_id is not None:
+            self._current_id = dlg.open_existing_genotype_id
+            self.reload()
+
+    # Exposed so MainWindow can toggle the button when the catalog
+    # is enabled/disabled in the Settings tab without a restart.
+    def set_import_visible(self, visible: bool) -> None:
+        self.import_btn.setVisible(visible)

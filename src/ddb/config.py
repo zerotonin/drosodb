@@ -10,6 +10,15 @@ _PKG_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
+    """Project-wide configuration, populated from env vars and `.env`.
+
+    Every field is overridable via `DDB_<UPPERCASE_NAME>` in `.env`
+    (e.g. `DDB_PRINTER_ENABLED=1`). Fields are grouped informally below
+    by subsystem: database, printer, GUI, camera. Callers should import
+    the module-level `settings` singleton rather than constructing
+    their own.
+    """
+
     model_config = SettingsConfigDict(
         env_file=_PKG_ROOT / ".env", env_prefix="DDB_", extra="ignore"
     )
@@ -66,6 +75,16 @@ class Settings(BaseSettings):
     # Which camera role the Scan tab starts on. Users can still switch
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"
+
+    # --- FlyBase genotype catalog ---
+    # Off by default so a first-run install doesn't phone home. Flipping
+    # this on enables the Settings-tab "Genotype catalog" group and the
+    # Genotypes-tab "Import…" button.
+    flybase_enabled: bool = False
+    # "manual" | "weekly" | "monthly" — how aggressive the startup
+    # refresh check should be when the local catalog is older than the
+    # corresponding threshold.
+    flybase_refresh_mode: str = "manual"
 
 
 settings = Settings()

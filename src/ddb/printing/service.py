@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,28 +38,47 @@ class PrintResult:
         return f"{self.backend_description}  bytes={self.raster_bytes}  [{tail}]"
 
 
+def _build_bluetooth() -> PrintBackend:
+    if not settings.printer_bluetooth_mac:
+        raise PrinterError("printer_backend=bluetooth but DDB_PRINTER_BLUETOOTH_MAC is unset")
+    return BluetoothRFCOMMBackend(
+        mac=settings.printer_bluetooth_mac,
+        channel=settings.printer_bluetooth_channel,
+        system_python=settings.printer_system_python,
+    )
+
+
+def _build_network() -> PrintBackend:
+    if not settings.printer_network_host:
+        raise PrinterError("printer_backend=network but DDB_PRINTER_NETWORK_HOST is unset")
+    return NetworkTCPBackend(
+        host=settings.printer_network_host,
+        port=settings.printer_network_port,
+    )
+
+
+def _build_file() -> PrintBackend:
+    out_dir = settings.printer_file_dir or (settings.data_dir / "print_jobs")
+    return FileBackend(out_dir=Path(out_dir))
+
+
+# Registry of configured-backend builders. Adding a new backend is two
+# steps: implement `PrintBackend` and add an entry here — no if/elif in
+# `get_backend` to touch.
+_BACKENDS: dict[str, Callable[[], PrintBackend]] = {
+    "bluetooth": _build_bluetooth,
+    "network": _build_network,
+    "file": _build_file,
+}
+
+
 def get_backend() -> PrintBackend:
     """Construct the configured backend, raising PrinterError if misconfigured."""
     kind = settings.printer_backend.lower()
-    if kind == "bluetooth":
-        if not settings.printer_bluetooth_mac:
-            raise PrinterError("printer_backend=bluetooth but DDB_PRINTER_BLUETOOTH_MAC is unset")
-        return BluetoothRFCOMMBackend(
-            mac=settings.printer_bluetooth_mac,
-            channel=settings.printer_bluetooth_channel,
-            system_python=settings.printer_system_python,
-        )
-    if kind == "network":
-        if not settings.printer_network_host:
-            raise PrinterError("printer_backend=network but DDB_PRINTER_NETWORK_HOST is unset")
-        return NetworkTCPBackend(
-            host=settings.printer_network_host,
-            port=settings.printer_network_port,
-        )
-    if kind == "file":
-        out_dir = settings.printer_file_dir or (settings.data_dir / "print_jobs")
-        return FileBackend(out_dir=Path(out_dir))
-    raise PrinterError(f"unknown printer_backend={settings.printer_backend!r}")
+    builder = _BACKENDS.get(kind)
+    if builder is None:
+        raise PrinterError(f"unknown printer_backend={settings.printer_backend!r}")
+    return builder()
 
 
 def print_png(

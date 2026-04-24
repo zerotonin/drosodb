@@ -76,6 +76,109 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[st
     return lines
 
 
+def _build_qr_image(print_code: str, side_px: int) -> Image.Image:
+    """Render the compact `DDB:<print_code>` payload as a square QR image
+    of exactly `side_px` pixels on a side. Separate so the composition
+    step can reason about layout without knowing the QR pipeline."""
+    payload = build_payload(print_code)
+    qr_png = make_qr_png(payload, scale=6, border=2)
+    qr_img = Image.open(BytesIO(qr_png)).convert("RGB")
+    return qr_img.resize((side_px, side_px), Image.NEAREST)
+
+
+def _draw_top_row(
+    draw: ImageDraw.ImageDraw,
+    *,
+    text_x: int,
+    text_w: int,
+    print_code: str,
+    generation: int | None,
+    created_date: str | None,
+) -> int:
+    """Render the print code + optional `g<N> · YYYY-MM-DD` badge.
+
+    Returns the y-coordinate where the next block should start.
+    """
+    code_font, badge_font, badge_text = _fit_top_row(
+        draw,
+        print_code=print_code,
+        generation=generation,
+        created_date=created_date,
+        max_width=text_w,
+    )
+    y = 4
+    draw.text((text_x, y), print_code, fill="black", font=code_font)
+    if badge_text:
+        code_w = int(draw.textlength(print_code, font=code_font))
+        # Vertically centre the small badge against the big print code.
+        badge_y = y + (code_font.size - badge_font.size) // 2 + 2
+        draw.text((text_x + code_w + 12, badge_y), badge_text, fill="#444", font=badge_font)
+    return y + code_font.size + 8
+
+
+def _draw_body(
+    draw: ImageDraw.ImageDraw,
+    *,
+    text_x: int,
+    text_w: int,
+    y: int,
+    genotype_name: str,
+    genotype_notation: str | None,
+) -> int:
+    """Render the middle zone: notation (primary) + short name (subtitle).
+
+    Both get the same font size so the biologist's eye can scan for the
+    expression first, the alias second. Returns the y-coordinate where
+    the next block should start.
+    """
+    primary_text = genotype_notation or genotype_name
+    subtitle_text: str | None = None
+    if genotype_notation and genotype_name and genotype_name != genotype_notation:
+        subtitle_text = genotype_name
+
+    body_font, primary_lines, subtitle_lines = _fit_body(draw, primary_text, subtitle_text, text_w)
+    line_h = body_font.size + 4
+    for line in primary_lines:
+        draw.text((text_x, y), line, fill="black", font=body_font)
+        y += line_h
+    for line in subtitle_lines:
+        draw.text((text_x, y), line, fill="#444", font=body_font)
+        y += line_h
+    return y
+
+
+def _draw_bottom_strip(
+    draw: ImageDraw.ImageDraw,
+    *,
+    text_x: int,
+    text_w: int,
+    label_w: int,
+    meta_y: int,
+    meta_font: ImageFont.FreeTypeFont,
+    owner_username: str | None,
+    donor_strain_id: str | None,
+) -> None:
+    """Render owner (left) + donor#id (right).
+
+    Each side gets an independent budget so a long username and a long
+    donor id can coexist without collision; either can ellipsise without
+    forcing the other to shrink.
+    """
+    owner_text = f"@{owner_username}" if owner_username else ""
+    donor_text = f"donor#{donor_strain_id}" if donor_strain_id else ""
+    # Donor gets priority on its natural width, owner gets whatever's left.
+    donor_w = int(draw.textlength(donor_text, font=meta_font)) if donor_text else 0
+    donor_budget = min(donor_w, text_w - 40)  # always leave 40px for owner
+    owner_budget = text_w - donor_budget - 8  # 8px separator gap
+    if owner_text:
+        owner_text = _clip_to_width(draw, owner_text, meta_font, owner_budget)
+        draw.text((text_x, meta_y), owner_text, fill="black", font=meta_font)
+    if donor_text:
+        donor_text = _clip_to_width(draw, donor_text, meta_font, donor_budget)
+        donor_w = int(draw.textlength(donor_text, font=meta_font))
+        draw.text((label_w - donor_w - 6, meta_y), donor_text, fill="black", font=meta_font)
+
+
 def render_label(
     vial_id: int,
     print_code: str,
@@ -93,83 +196,51 @@ def render_label(
     becomes the dominant middle text and `genotype_name` drops to a small
     italic subtitle. When notation is None, we fall back to the old layout
     with the name as the main text — keeps existing callers/tests working.
+
+    vial_id / database_id stay in the signature for caller compat but no
+    longer land in the QR — compact `DDB:<print_code>` renders as a Micro
+    QR with ~60% bigger physical cells on the 17mm label, which is what
+    a soft webcam needs.
     """
-    # vial_id / database_id are kept in the signature for caller compat but
-    # no longer land in the QR — compact `DDB:<print_code>` renders as a
-    # Micro QR with ~60% bigger physical cells on the 17mm label, which is
-    # what a soft webcam needs. Border = 2 modules is Micro-QR spec.
     _ = (vial_id, database_id)
-    payload = build_payload(print_code)
-    qr_png = make_qr_png(payload, scale=6, border=2)
-    qr_img = Image.open(BytesIO(qr_png)).convert("RGB")
 
     w, h = LABEL_PX
     label = Image.new("RGB", (w, h), "white")
 
     # QR takes the left square, 2px margin.
     qr_side = h - 8
-    qr_img = qr_img.resize((qr_side, qr_side), Image.NEAREST)
-    label.paste(qr_img, (4, 4))
+    label.paste(_build_qr_image(print_code, qr_side), (4, 4))
 
     draw = ImageDraw.Draw(label)
     text_x = qr_side + 12
     text_w = w - text_x - 4
 
-    # Top row: print code + optional g<N> · YYYY-MM-DD badge. The print
-    # code shrinks (48→36px) if absurdly long; the badge shrinks its own
-    # font ladder and drops the date before the generation.
-    meta_font = _load_font(18)
-    code_font, badge_font, badge_text = _fit_top_row(
+    y = _draw_top_row(
         draw,
+        text_x=text_x,
+        text_w=text_w,
         print_code=print_code,
         generation=generation,
         created_date=created_date,
-        max_width=text_w,
     )
-    y = 4
-    draw.text((text_x, y), print_code, fill="black", font=code_font)
-    if badge_text:
-        code_w = int(draw.textlength(print_code, font=code_font))
-        # Vertically centre the small badge against the big print code.
-        badge_y = y + (code_font.size - badge_font.size) // 2 + 2
-        draw.text((text_x + code_w + 12, badge_y), badge_text, fill="#444", font=badge_font)
-    y += code_font.size + 8
-
-    # Middle zone: notation (primary) + short name (subtitle), same font size.
-    # Picking one font shared by both keeps the label readable at a glance —
-    # biologists scan for the expression first, the alias second.
-    primary_text = genotype_notation or genotype_name
-    subtitle_text: str | None = None
-    if genotype_notation and genotype_name and genotype_name != genotype_notation:
-        subtitle_text = genotype_name
-
-    body_font, primary_lines, subtitle_lines = _fit_body(draw, primary_text, subtitle_text, text_w)
-    line_h = body_font.size + 4
-    for line in primary_lines:
-        draw.text((text_x, y), line, fill="black", font=body_font)
-        y += line_h
-    for line in subtitle_lines:
-        draw.text((text_x, y), line, fill="#444", font=body_font)
-        y += line_h
-
-    meta_y = h - 22
-
-    # Bottom strip: owner (left) + donor#id (right). Split `text_w` between
-    # them so that a long username or a long donor id can never collide —
-    # each side gets ellipsised independently if it overflows its half.
-    owner_text = f"@{owner_username}" if owner_username else ""
-    donor_text = f"donor#{donor_strain_id}" if donor_strain_id else ""
-    # Donor gets priority on its natural width, owner gets whatever's left.
-    donor_w = int(draw.textlength(donor_text, font=meta_font)) if donor_text else 0
-    donor_budget = min(donor_w, text_w - 40)  # always leave 40px for owner
-    owner_budget = text_w - donor_budget - 8  # 8px separator gap
-    if owner_text:
-        owner_text = _clip_to_width(draw, owner_text, meta_font, owner_budget)
-        draw.text((text_x, meta_y), owner_text, fill="black", font=meta_font)
-    if donor_text:
-        donor_text = _clip_to_width(draw, donor_text, meta_font, donor_budget)
-        donor_w = int(draw.textlength(donor_text, font=meta_font))
-        draw.text((w - donor_w - 6, meta_y), donor_text, fill="black", font=meta_font)
+    _draw_body(
+        draw,
+        text_x=text_x,
+        text_w=text_w,
+        y=y,
+        genotype_name=genotype_name,
+        genotype_notation=genotype_notation,
+    )
+    _draw_bottom_strip(
+        draw,
+        text_x=text_x,
+        text_w=text_w,
+        label_w=w,
+        meta_y=h - 22,
+        meta_font=_load_font(18),
+        owner_username=owner_username,
+        donor_strain_id=donor_strain_id,
+    )
 
     buf = BytesIO()
     label.save(buf, format="PNG", dpi=(DPI, DPI))

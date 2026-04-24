@@ -5,9 +5,13 @@ Two formats are supported:
   - **Compact** (current): `DDB:<print_code>` — e.g. `DDB:VWM2D`.
     What we generate for every new label. Fits Micro QR.
 
-  - **Legacy**: `ddb:1:vial:<vial_id>?pc=<print_code>&db=<database_id>`.
-    What earlier DDB versions stamped onto labels. Still parseable so
-    previously-printed labels keep scanning.
+  - **Legacy — DEPRECATED**: `ddb:1:vial:<vial_id>?pc=<print_code>&db=<database_id>`.
+    What earlier DDB versions stamped onto labels. Kept parseable so
+    previously-printed labels keep scanning, but nothing in the project
+    *writes* this format any more. Once every vial with a legacy label
+    has been flipped (giving it a new compact-format label), the legacy
+    branch here can be removed.
+    TODO: drop legacy parser once flip turnover is complete.
 
 In both cases `print_code` is the primary key we care about; the
 scanner's lookup function uses it (or falls back to `vial_id` for legacy
