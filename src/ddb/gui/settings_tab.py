@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +35,8 @@ from sqlmodel import Session, select
 
 from ddb.config import settings
 from ddb.db import engine
+from ddb.flybase.catalog import paths_for, read_meta
+from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
 from ddb.gui.dialogs.printer_reconnect import PrinterReconnectDialog
 from ddb.gui.printer_status import PrinterStatusLight, shared_monitor
 from ddb.models import Donor, OrgUnit, User
@@ -64,6 +68,7 @@ class SettingsTab(QWidget):
 
     debug_changed = Signal(bool)
     default_camera_changed = Signal(str)
+    catalog_enabled_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -71,6 +76,7 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_debug_group())
         layout.addWidget(self._build_printer_group())
+        layout.addWidget(self._build_catalog_group())
         layout.addWidget(self._build_camera_group())
         layout.addWidget(self._build_donor_group())
         layout.addWidget(self._build_user_group())
@@ -120,6 +126,235 @@ class SettingsTab(QWidget):
         # Always re-probe after the dialog closes so the light reflects
         # whatever state the printer is in now.
         monitor.force_probe()
+
+    # ------------------------------------------------------------------
+    # Genotype catalog (FlyBase)
+    # ------------------------------------------------------------------
+
+    def _build_catalog_group(self) -> QGroupBox:
+        box = QGroupBox("Genotype catalog")
+
+        # Row 1 — master toggle + help button.
+        self.catalog_chk = QCheckBox("Import genotype data from FlyBase")
+        self.catalog_chk.setChecked(settings.flybase_enabled)
+        self.catalog_chk.toggled.connect(self._on_catalog_toggled)
+        help_btn = QPushButton("?")
+        help_btn.setFixedWidth(28)
+        help_btn.setToolTip("Which stock collections does this catalog cover?")
+        help_btn.clicked.connect(self._on_catalog_help)
+        row1 = QHBoxLayout()
+        row1.addWidget(self.catalog_chk)
+        row1.addWidget(help_btn)
+        row1.addStretch()
+
+        # Row 2 — status line (release + age + row count).
+        self.catalog_status_lbl = QLabel()
+        self.catalog_status_lbl.setStyleSheet("color: #666;")
+        self.catalog_status_lbl.setWordWrap(True)
+
+        # Row 3 — refresh mode radio group.
+        self.catalog_mode_group = QButtonGroup(self)
+        self.catalog_mode_manual = QRadioButton("Manual")
+        self.catalog_mode_weekly = QRadioButton("Weekly")
+        self.catalog_mode_monthly = QRadioButton("Monthly")
+        for mode, rb in (
+            ("manual", self.catalog_mode_manual),
+            ("weekly", self.catalog_mode_weekly),
+            ("monthly", self.catalog_mode_monthly),
+        ):
+            self.catalog_mode_group.addButton(rb)
+            if settings.flybase_refresh_mode == mode:
+                rb.setChecked(True)
+        if not self.catalog_mode_group.checkedButton():
+            self.catalog_mode_manual.setChecked(True)
+        self.catalog_mode_manual.toggled.connect(
+            lambda b: b and self._on_refresh_mode_changed("manual")
+        )
+        self.catalog_mode_weekly.toggled.connect(
+            lambda b: b and self._on_refresh_mode_changed("weekly")
+        )
+        self.catalog_mode_monthly.toggled.connect(
+            lambda b: b and self._on_refresh_mode_changed("monthly")
+        )
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Refresh:"))
+        row3.addWidget(self.catalog_mode_manual)
+        row3.addWidget(self.catalog_mode_weekly)
+        row3.addWidget(self.catalog_mode_monthly)
+        row3.addStretch()
+
+        # Row 4 — download / check buttons.
+        self.catalog_download_btn = QPushButton("Download now")
+        self.catalog_check_btn = QPushButton("Check for update")
+        self.catalog_download_btn.clicked.connect(self._on_download_catalog)
+        self.catalog_check_btn.clicked.connect(self._on_check_catalog_update)
+        row4 = QHBoxLayout()
+        row4.addWidget(self.catalog_download_btn)
+        row4.addWidget(self.catalog_check_btn)
+        row4.addStretch()
+
+        # Row 5 — file path display (monospace, selectable — user can
+        # delete the file manually if they want).
+        self.catalog_path_lbl = QLabel()
+        self.catalog_path_lbl.setStyleSheet("font-family: monospace; color: #666;")
+        self.catalog_path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.catalog_path_lbl.setWordWrap(True)
+
+        lo = QVBoxLayout(box)
+        lo.addLayout(row1)
+        lo.addWidget(self.catalog_status_lbl)
+        lo.addLayout(row3)
+        lo.addLayout(row4)
+        lo.addWidget(self.catalog_path_lbl)
+
+        self._refresh_catalog_ui()
+        return box
+
+    def _refresh_catalog_ui(self) -> None:
+        """Recompute status line + path label from the current on-disk meta.
+        Call after a download completes, or after the checkbox toggles."""
+        paths = paths_for(settings.data_dir)
+        self.catalog_path_lbl.setText(f"File: {paths.tsv_gz}")
+
+        meta = read_meta(paths)
+        if meta is None:
+            self.catalog_status_lbl.setText(
+                "<i>Catalog not downloaded yet.</i>"
+                if settings.flybase_enabled
+                else "<i>Disabled.</i>"
+            )
+        else:
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            age = now - meta.downloaded_at
+            age_days = age.days
+            if age_days == 0:
+                age_text = "today"
+            else:
+                age_text = f"{age_days} day{'s' if age_days != 1 else ''} ago"
+            self.catalog_status_lbl.setText(
+                f"Release <b>{meta.release}</b> · {meta.row_count:,} stocks · "
+                f"downloaded {age_text}."
+            )
+
+        # Enable/disable child controls based on master toggle.
+        enabled = settings.flybase_enabled
+        for w in (
+            self.catalog_mode_manual,
+            self.catalog_mode_weekly,
+            self.catalog_mode_monthly,
+            self.catalog_download_btn,
+            self.catalog_check_btn,
+        ):
+            w.setEnabled(enabled)
+
+    def _on_catalog_toggled(self, checked: bool) -> None:
+        settings.flybase_enabled = checked
+        try:
+            _upsert_env_var(_env_path(), "DDB_FLYBASE_ENABLED", "1" if checked else "0")
+        except OSError as e:
+            QMessageBox.warning(
+                self, "Could not save .env", f"Setting applied in-session but not persisted: {e}"
+            )
+        self._refresh_catalog_ui()
+        self.catalog_enabled_changed.emit(checked)
+
+    def _on_refresh_mode_changed(self, mode: str) -> None:
+        settings.flybase_refresh_mode = mode
+        try:
+            _upsert_env_var(_env_path(), "DDB_FLYBASE_REFRESH_MODE", mode)
+        except OSError as e:
+            QMessageBox.warning(
+                self, "Could not save .env", f"Setting applied in-session but not persisted: {e}"
+            )
+
+    def _on_download_catalog(self) -> None:
+        paths = paths_for(settings.data_dir)
+        ok = QMessageBox.question(
+            self,
+            "Download FlyBase catalog?",
+            "Download the current FlyBase stocks catalog?<br><br>"
+            "~3 MB, one file, covering Bloomington, Vienna (VDRC), Kyoto, "
+            "NIG-Fly, KDRC, FlyORF, and NDSSC. You can refresh it later from "
+            "this same panel.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        dlg = FlybaseDownloadDialog(paths, parent=self)
+        dlg.exec()
+        self._refresh_catalog_ui()
+
+    def _on_check_catalog_update(self) -> None:
+        """Compare the local release to the remote index; prompt if newer."""
+        from ddb.flybase.catalog import discover_current_release
+
+        paths = paths_for(settings.data_dir)
+        meta = read_meta(paths)
+
+        try:
+            info = discover_current_release(timeout_s=10.0)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Could not check for updates",
+                f"FlyBase's release index is unreachable: {e}",
+            )
+            return
+
+        if meta is not None and meta.release == info.release:
+            QMessageBox.information(
+                self,
+                "Catalog up to date",
+                f"You have the latest release: <b>{info.release}</b>.",
+            )
+            return
+
+        current_txt = meta.release if meta is not None else "(none)"
+        ok = QMessageBox.question(
+            self,
+            "New catalog available",
+            f"A newer release is available: <b>{info.release}</b>.<br>"
+            f"Your current release: <code>{current_txt}</code>.<br><br>"
+            "Download it now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        dlg = FlybaseDownloadDialog(paths, release=info, parent=self)
+        dlg.exec()
+        self._refresh_catalog_ui()
+
+    def _on_catalog_help(self) -> None:
+        """List the collections covered by the currently-downloaded catalog.
+        Driven by real meta so it can't drift from what's on disk."""
+        paths = paths_for(settings.data_dir)
+        meta = read_meta(paths)
+        if meta is None:
+            QMessageBox.information(
+                self,
+                "Genotype catalog — coverage",
+                "No catalog downloaded yet. Click <b>Download now</b> above to "
+                "fetch the current FlyBase release; the list of collections "
+                "will appear here afterwards.",
+            )
+            return
+        rows = sorted(meta.collection_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        html = (
+            "<b>Available stock collections in this catalog</b> "
+            f"(release {meta.release}):<br><br><table>"
+            + "".join(
+                f"<tr><td>{name}</td><td>&nbsp;&nbsp;</td><td>{n:,} stocks</td></tr>"
+                for name, n in rows
+            )
+            + "</table><br>"
+            "Enter a stock-center ID in the Import dialog, or a FlyBase "
+            "FBst number for direct lookup."
+        )
+        QMessageBox.information(self, "Genotype catalog — coverage", html)
 
     # ------------------------------------------------------------------
     # Default camera for scanning

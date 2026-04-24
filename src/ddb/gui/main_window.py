@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QMainWindow, QStatusBar, QTabWidget
+from datetime import UTC, datetime, timedelta
+
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QStatusBar, QTabWidget
 
 from ddb.config import settings
+from ddb.flybase import RefreshDecision, decide_refresh, paths_for, read_meta
+from ddb.flybase.catalog import read_postpone, write_postpone
+from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
 
 from .genotypes_tab import GenotypesTab
 from .printer_status import PrinterStatusMonitor, install_shared_monitor
@@ -42,6 +48,11 @@ class MainWindow(QMainWindow):
         self.settings_tab.debug_changed.connect(self.scan_tab.snapshot_btn.setVisible)
         # Reflect default-camera changes immediately in the Scan-tab combo.
         self.settings_tab.default_camera_changed.connect(self._on_default_camera_changed)
+        # Show/hide the Genotypes-tab Import button when the catalog
+        # master toggle flips, so the user doesn't have to restart.
+        self.settings_tab.catalog_enabled_changed.connect(
+            self.genotypes_tab.set_import_visible
+        )
 
         # Reload reports + genotypes when the tab becomes visible so data
         # stays fresh after creating/editing from elsewhere in the app.
@@ -50,6 +61,10 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
+
+        # Deferred: ask about catalog refresh after the window is on
+        # screen so the user sees DDB first, not a surprise dialog.
+        QTimer.singleShot(500, self._check_catalog_refresh)
 
     def _on_default_camera_changed(self, role: str) -> None:
         idx = self.scan_tab.role_box.findText(role)
@@ -63,6 +78,73 @@ class MainWindow(QMainWindow):
         elif widget is self.genotypes_tab:
             # Genotype list needs a refresh to show vial-count changes.
             self.genotypes_tab.reload()
+
+    # ------------------------------------------------------------------
+    # FlyBase catalog refresh prompt
+    # ------------------------------------------------------------------
+
+    def _check_catalog_refresh(self) -> None:
+        """Consult the scheduler; open the appropriate prompt if any."""
+        paths = paths_for(settings.data_dir)
+        meta = read_meta(paths)
+        decision = decide_refresh(
+            enabled=settings.flybase_enabled,
+            mode=settings.flybase_refresh_mode,
+            catalog_downloaded_at=meta.downloaded_at if meta is not None else None,
+            postponed_until=read_postpone(paths),
+            now=datetime.now(UTC),
+        )
+        if decision is RefreshDecision.PROMPT_MISSING:
+            self._prompt_missing_catalog(paths)
+        elif decision is RefreshDecision.PROMPT_STALE and meta is not None:
+            self._prompt_stale_catalog(paths, meta)
+        # NOTHING and POSTPONED → stay quiet.
+
+    def _prompt_missing_catalog(self, paths) -> None:
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle("FlyBase catalog")
+        msg.setText(
+            "The FlyBase genotype catalog hasn't been downloaded yet. "
+            "It lets you import stocks by ID (Bloomington / Vienna / Kyoto / …). "
+            "Download now (~3 MB)?"
+        )
+        dl_btn = msg.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Later (7 days)", QMessageBox.ButtonRole.DestructiveRole)
+        msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is dl_btn:
+            FlybaseDownloadDialog(paths, parent=self).exec()
+            self.settings_tab._refresh_catalog_ui()
+        elif clicked is not None and clicked.text().startswith("Later"):
+            write_postpone(paths, datetime.now(UTC) + timedelta(days=7))
+
+    def _prompt_stale_catalog(self, paths, meta) -> None:
+        age_days = (datetime.now(UTC) - meta.downloaded_at).days
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setWindowTitle("FlyBase catalog — update?")
+        msg.setText(
+            f"Your FlyBase catalog (release <b>{meta.release}</b>) is "
+            f"{age_days} days old. Check for a newer release and update now?"
+        )
+        update_btn = msg.addButton("Update", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Postpone 1 day", QMessageBox.ButtonRole.DestructiveRole)
+        msg.addButton("Postpone 7 days", QMessageBox.ButtonRole.DestructiveRole)
+        msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is update_btn:
+            FlybaseDownloadDialog(paths, parent=self).exec()
+            self.settings_tab._refresh_catalog_ui()
+        elif clicked is not None and clicked.text() == "Postpone 1 day":
+            write_postpone(paths, datetime.now(UTC) + timedelta(days=1))
+        elif clicked is not None and clicked.text() == "Postpone 7 days":
+            write_postpone(paths, datetime.now(UTC) + timedelta(days=7))
+        # "Not now" just closes; next startup will re-prompt.
+
+    # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.scan_tab.shutdown()
