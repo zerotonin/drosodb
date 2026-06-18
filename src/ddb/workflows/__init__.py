@@ -8,9 +8,12 @@ from ddb.workflows.vial import (
     GenotypeNotFoundError,
     VialNotFoundError,
     WorkflowError,
+    active_flip_descendant_codes,
     create_vial,
     decommission_vial,
     flip_vial,
+    multiply_vial,
+    reactivate_vial,
 )
 
 __all__ = [
@@ -18,10 +21,13 @@ __all__ = [
     "GenotypeStillHasActiveVialsError",
     "VialNotFoundError",
     "WorkflowError",
+    "active_flip_descendant_codes",
     "create_vial",
     "decommission_vial",
     "drop_genotype_from_stock",
     "flip_vial",
+    "multiply_vial",
     "reactivate_genotype_in_stock",
+    "reactivate_vial",
     "update_genotype",
 ]

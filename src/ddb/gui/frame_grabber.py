@@ -35,6 +35,35 @@ def _bgr_to_qimage(frame: np.ndarray) -> QImage:
     return QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
 
 
+def dedupe_emissions(
+    payloads: list[str],
+    last_emitted: dict[str, float],
+    *,
+    now: float,
+    reset_after_s: float,
+) -> list[str]:
+    """Decide which payloads to emit and update `last_emitted` in place.
+
+    Returns the subset of `payloads` whose previous emission (if any) was
+    longer than `reset_after_s` seconds ago. Critically, `last_emitted`
+    is only updated for payloads we ACTUALLY emit — bumping it on every
+    sighting would mean a QR held continuously in front of the camera
+    suppresses itself forever, so re-scanning the same vial (e.g. after
+    a flip) wouldn't re-fire `payload_decoded`.
+    """
+    out: list[str] = []
+    for p in payloads:
+        prev = last_emitted.get(p)
+        if prev is None or (now - prev) > reset_after_s:
+            out.append(p)
+            last_emitted[p] = now
+    # Drop stale entries so the dict stays bounded over a long session.
+    for k in list(last_emitted):
+        if now - last_emitted[k] > reset_after_s:
+            del last_emitted[k]
+    return out
+
+
 class FrameGrabber(QThread):
     frame_ready = Signal(QImage)
     payload_decoded = Signal(str)
@@ -80,7 +109,7 @@ class FrameGrabber(QThread):
             self.error.emit(str(e))
             return
 
-        last_seen: dict[str, float] = {}
+        last_emitted: dict[str, float] = {}
         # Rolling mean of recent sharpness values — keeps the on-screen
         # number from jittering between, say, 180 and 420 between frames.
         sharp_window: list[float] = []
@@ -125,15 +154,13 @@ class FrameGrabber(QThread):
                             self.auto_snapshot_saved.emit(str(path))
 
                     payloads = decode_image_smart(frame)
-                    for p in payloads:
-                        prev = last_seen.get(p)
-                        if prev is None or (now - prev) > self.reset_after_s:
-                            self.payload_decoded.emit(p)
-                        last_seen[p] = now
-                    # Drop stale entries so memory is bounded.
-                    last_seen = {
-                        k: t for k, t in last_seen.items() if now - t <= self.reset_after_s
-                    }
+                    for p in dedupe_emissions(
+                        payloads,
+                        last_emitted,
+                        now=now,
+                        reset_after_s=self.reset_after_s,
+                    ):
+                        self.payload_decoded.emit(p)
         except Exception as e:  # noqa: BLE001
             self.error.emit(str(e))
 

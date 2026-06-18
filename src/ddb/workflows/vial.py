@@ -203,6 +203,99 @@ def flip_vial(
     return CreatedVial(vial=new, label_path=label_path)
 
 
+def multiply_vial(
+    session: Session,
+    *,
+    old_print_code: str,
+    count: int,
+    actor_id: int | None = None,
+    owner_id: int | None = None,
+    notes: str | None = None,
+) -> list[CreatedVial]:
+    """Decommission one vial and create `count` successor children.
+
+    A 1-to-N flip: same genotype, owner, and org unit as the parent;
+    each child gets a fresh print code, generation+1, and
+    `flipped_from_id` pointing at the same parent. Used in the lab when
+    one fly stock is split across several fresh food vials.
+
+    All DB mutations happen in a single commit so a crash mid-batch
+    can't leave the parent decommissioned without children. Label PNGs
+    are rendered after the commit (cheap; recoverable).
+    """
+    if count < 1:
+        raise WorkflowError(f"multiply requires count >= 1 (got {count})")
+
+    old = session.exec(
+        select(Vial).where(Vial.print_code == old_print_code, Vial.is_active.is_(True))
+    ).first()
+    if old is None:
+        raise VialNotFoundError(f"no active vial with print_code={old_print_code!r}")
+
+    genotype = session.get(Genotype, old.genotype_id)
+    if genotype is None:  # pragma: no cover — FK would normally prevent this
+        raise GenotypeNotFoundError(f"genotype_id={old.genotype_id} missing")
+
+    now = datetime.now(UTC)
+    old.is_active = False
+    old.decommissioned_at = now
+    session.add(old)
+
+    new_vials: list[Vial] = []
+    for _ in range(count):
+        v = Vial(
+            print_code=_unique_print_code(session),
+            genotype_id=old.genotype_id,
+            owner_id=owner_id if owner_id is not None else old.owner_id,
+            org_unit_id=old.org_unit_id,
+            flipped_from_id=old.id,
+            generation=old.generation + 1,
+            notes=notes,
+        )
+        session.add(v)
+        new_vials.append(v)
+    session.flush()  # populate ids before we reference them in audit payloads
+
+    audit_events: list[AuditEvent] = [
+        AuditEvent(
+            actor_id=actor_id,
+            entity_type="vial",
+            entity_id=old.id,
+            action="decommission",
+            payload={
+                "reason": "multiply",
+                "new_vial_ids": [v.id for v in new_vials],
+                "new_print_codes": [v.print_code for v in new_vials],
+            },
+        )
+    ]
+    for v in new_vials:
+        audit_events.append(
+            AuditEvent(
+                actor_id=actor_id,
+                entity_type="vial",
+                entity_id=v.id,
+                action="flip_from",
+                payload={
+                    "from_vial_id": old.id,
+                    "from_print_code": old_print_code,
+                    "print_code": v.print_code,
+                    "genotype_id": v.genotype_id,
+                    "siblings": [sib.print_code for sib in new_vials if sib.id != v.id],
+                },
+            )
+        )
+    session.add_all(audit_events)
+    session.commit()
+
+    results: list[CreatedVial] = []
+    for v in new_vials:
+        session.refresh(v)
+        label_path = _render_and_save_label(session, v, genotype)
+        results.append(CreatedVial(vial=v, label_path=label_path))
+    return results
+
+
 def decommission_vial(
     session: Session,
     *,
@@ -230,6 +323,73 @@ def decommission_vial(
             entity_id=vial.id,
             action="decommission",
             payload={"reason": reason or "end-of-life", "new_vial_id": None},
+        )
+    )
+    session.commit()
+    session.refresh(vial)
+    return vial
+
+
+def active_flip_descendant_codes(session: Session, vial_id: int) -> list[str]:
+    """Return print codes of currently-active vials downstream of `vial_id`.
+
+    Walks the flip-chain (flipped_from_id) forward. Used to warn the user
+    before reactivating a decommissioned vial: if an active descendant
+    exists, reactivating creates a fork in the lineage.
+    """
+    out: list[str] = []
+    frontier = [vial_id]
+    seen: set[int] = {vial_id}
+    while frontier:
+        next_frontier: list[int] = []
+        for parent_id in frontier:
+            children = session.exec(
+                select(Vial).where(Vial.flipped_from_id == parent_id)
+            ).all()
+            for child in children:
+                if child.id in seen:
+                    continue
+                seen.add(child.id)
+                if child.is_active:
+                    out.append(child.print_code)
+                next_frontier.append(child.id)
+        frontier = next_frontier
+    return sorted(out)
+
+
+def reactivate_vial(
+    session: Session,
+    *,
+    print_code: str,
+    actor_id: int | None = None,
+) -> Vial:
+    """Undo a decommission — mark a vial as active again.
+
+    Idempotent if already active. Audited so the round-trip stays
+    visible. Does NOT auto-decommission active descendants; if the
+    caller wants to avoid a forked lineage, they should check
+    `active_flip_descendant_codes` first and handle it explicitly.
+    """
+    vial = session.exec(select(Vial).where(Vial.print_code == print_code)).first()
+    if vial is None:
+        raise VialNotFoundError(f"no vial with print_code={print_code!r}")
+    if vial.is_active:
+        return vial  # idempotent
+
+    descendants = active_flip_descendant_codes(session, vial.id)
+    vial.is_active = True
+    vial.decommissioned_at = None
+    session.add(vial)
+    session.add(
+        AuditEvent(
+            actor_id=actor_id,
+            entity_type="vial",
+            entity_id=vial.id,
+            action="reactivate",
+            payload={
+                "print_code": vial.print_code,
+                "active_descendants": descendants,
+            },
         )
     )
     session.commit()
