@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"
 
+    # Audible "ping" (bundled 1-Up WAV) on every successful QR decode.
+    # Helpful in a noisy lab where the user isn't always looking at the
+    # screen while passing vials under the camera. Set DDB_SCAN_SOUND=0
+    # to mute. Playback uses `aplay`; if it's missing the chirp silently
+    # no-ops.
+    scan_sound: bool = True
+
     # --- FlyBase genotype catalog ---
     # Off by default so a first-run install doesn't phone home. Flipping
     # this on enables the Settings-tab "Genotype catalog" group and the
