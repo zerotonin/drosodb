@@ -36,6 +36,7 @@ from .camera_widget import CameraWidget
 from .dialogs import CreateVialDialog
 from .frame_grabber import FrameGrabber
 from .printer_status import PrinterStatusLight, shared_monitor
+from .sounds import play_scan_sound
 from .vial_detail_panel import DetailPanel
 
 
@@ -131,6 +132,7 @@ class ScanTab(QWidget):
         self.camera.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.detail = DetailPanel()
         self.detail.setMaximumWidth(460)
+        self.detail.vial_changed.connect(self.status.setText)
 
         row = QHBoxLayout()
         row.addWidget(self.camera, 2)
@@ -220,6 +222,12 @@ class ScanTab(QWidget):
         except PayloadParseError:
             self.status.setText(f"ignored non-ddb payload: {raw[:40]}")
             return
+
+        # Audible confirmation a QR was decoded — fires regardless of
+        # whether the code is in the DB, because the user wants to hear
+        # "the camera saw it" even when scanning an unknown label.
+        if settings.scan_sound:
+            play_scan_sound()
 
         with Session(engine) as s:
             detail = lookup_detail_by_payload(s, parsed)

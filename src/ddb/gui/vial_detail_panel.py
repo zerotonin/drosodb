@@ -9,14 +9,16 @@ buttons for whichever vial is currently loaded.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -32,11 +34,33 @@ from ddb.gui.dialogs import ReconnectChoice, check_printer_or_ask
 from ddb.gui.printer_status import shared_monitor
 from ddb.lineage import export_lineage_csv
 from ddb.models import Vial
-from ddb.reports import VialDetail
+from ddb.reports import VialDetail, vial_detail
+from ddb.workflows import (
+    VialNotFoundError,
+    WorkflowError,
+    active_flip_descendant_codes,
+    decommission_vial,
+    flip_vial,
+    multiply_vial,
+    reactivate_vial,
+)
+
+MULTIPLY_MIN = 2
+MULTIPLY_MAX = 12
+MULTIPLY_DEFAULT = 4
+
+# Pause between batch prints so the Brother's BT stack can fully close
+# the prior RFCOMM socket before we open the next — matches the value
+# CreateVialDialog uses for its New-Vial batch loop.
+_BATCH_PRINT_SETTLE_S = 1.0
 
 
 class DetailPanel(QWidget):
     """The right-hand panel. All fields update when a new vial is loaded."""
+
+    # Emitted after a Flip/Decommission so the host tab can refresh its
+    # status line. Carries a short human-readable message.
+    vial_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -81,22 +105,50 @@ class DetailPanel(QWidget):
         audit_l.addWidget(self.audit)
         audit_box.setLayout(audit_l)
 
-        btns = QHBoxLayout()
+        # Two rows so the per-vial actions don't form one wide strip and
+        # so semantically related buttons stay grouped. Row 1: lifecycle
+        # (Flip / Decommission / Reactivate). Row 2: outputs + bulk ops
+        # (Multiply / Print / Export lineage CSV).
         self.flip_btn = QPushButton("Flip")
         self.decommission_btn = QPushButton("Decommission")
+        self.reactivate_btn = QPushButton("Reactivate")
+        self.multiply_btn = QPushButton("Multiply…")
+        self.multiply_btn.setToolTip(
+            f"Flip this vial into multiple children at once "
+            f"({MULTIPLY_MIN}–{MULTIPLY_MAX}). Same genotype/owner/unit; "
+            "each child gets its own label."
+        )
         self.print_btn = QPushButton("Print")
         self.export_lineage_btn = QPushButton("Export lineage CSV…")
-        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
+        self._all_btns = (
+            self.flip_btn,
+            self.decommission_btn,
+            self.reactivate_btn,
+            self.multiply_btn,
+            self.print_btn,
+            self.export_lineage_btn,
+        )
+        for b in self._all_btns:
             b.setEnabled(False)
-            btns.addWidget(b)
+        btns_row1 = QHBoxLayout()
+        for b in (self.flip_btn, self.decommission_btn, self.reactivate_btn):
+            btns_row1.addWidget(b)
+        btns_row2 = QHBoxLayout()
+        for b in (self.multiply_btn, self.print_btn, self.export_lineage_btn):
+            btns_row2.addWidget(b)
         self.export_lineage_btn.clicked.connect(self._export_lineage)
         self.print_btn.clicked.connect(self._print_label)
+        self.flip_btn.clicked.connect(self._flip)
+        self.decommission_btn.clicked.connect(self._decommission)
+        self.reactivate_btn.clicked.connect(self._reactivate)
+        self.multiply_btn.clicked.connect(self._multiply)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
         layout.addWidget(form_box)
         layout.addWidget(audit_box)
-        layout.addLayout(btns)
+        layout.addLayout(btns_row1)
+        layout.addLayout(btns_row2)
         layout.addStretch()
 
     @Slot(object, str)
@@ -144,6 +196,11 @@ class DetailPanel(QWidget):
         self.export_lineage_btn.setEnabled(True)
         self.flip_btn.setEnabled(r.is_active)
         self.decommission_btn.setEnabled(r.is_active)
+        # Multiply is a 1-to-N flip, so it has the same precondition as Flip.
+        self.multiply_btn.setEnabled(r.is_active)
+        # Reactivate is the inverse of decommission — only offered when
+        # the vial is currently inactive.
+        self.reactivate_btn.setEnabled(not r.is_active)
         # Print only if the label PNG still exists AND printer is enabled.
         label_path = settings.data_dir / "labels" / f"{r.print_code}.png"
         self.print_btn.setEnabled(settings.printer_enabled and label_path.exists())
@@ -166,7 +223,7 @@ class DetailPanel(QWidget):
         self.audit.clear()
         self._current_vial_id = None
         self._current_print_code = None
-        for b in (self.flip_btn, self.decommission_btn, self.print_btn, self.export_lineage_btn):
+        for b in self._all_btns:
             b.setEnabled(False)
 
     def _print_label(self) -> None:
@@ -221,3 +278,295 @@ class DetailPanel(QWidget):
                 return
             path = export_lineage_csv(s, v.id, Path(out))
         QMessageBox.information(self, "Lineage exported", f"Wrote {path}")
+
+    def _flip(self) -> None:
+        """Decommission the loaded vial and create a successor.
+
+        Mirrors `CreateVialDialog`'s printer-gate pattern: if the user has
+        auto-print enabled, the new label is sent to the printer in the
+        same click. Failure to print does not roll back the DB row — the
+        new vial is persistent and re-printable from this panel.
+        """
+        if self._current_print_code is None or self._current_vial_id is None:
+            return
+        old_code = self._current_print_code
+
+        confirm = QMessageBox.question(
+            self,
+            "Flip vial?",
+            f"Flip {old_code}?\n\n"
+            "This decommissions the current vial and creates a successor "
+            "with the same genotype, owner, and org unit.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        do_print = settings.printer_enabled and settings.printer_auto_print
+        if do_print:
+            choice = check_printer_or_ask(self)
+            if choice is ReconnectChoice.CANCEL:
+                return
+            do_print = choice is not ReconnectChoice.SKIP
+
+        self.flip_btn.setEnabled(False)
+        try:
+            with Session(engine) as s:
+                created = flip_vial(s, old_print_code=old_code)
+                new_vial_id = created.vial.id
+                new_code = created.vial.print_code
+                label_path = Path(str(created.label_path))
+        except VialNotFoundError as e:
+            QMessageBox.warning(self, "Flip failed", str(e))
+            self.flip_btn.setEnabled(True)
+            return
+        except WorkflowError as e:
+            QMessageBox.critical(self, "Flip failed", str(e))
+            self.flip_btn.setEnabled(True)
+            return
+
+        printed = False
+        print_error: str | None = None
+        if do_print and label_path.exists():
+            from ddb.printing.service import PrinterError, print_png
+
+            monitor = shared_monitor()
+            try:
+                print_png(label_path.read_bytes())
+                printed = True
+            except (PrinterError, OSError, ConnectionError) as e:
+                print_error = str(e)
+                if monitor is not None:
+                    monitor.force_probe()
+
+        with Session(engine) as s:
+            detail = vial_detail(s, new_vial_id)
+        if detail is not None:
+            self.show_detail(detail, f"flip {old_code} → {new_code}")
+
+        suffix = " [printed]" if printed else (" [print failed]" if print_error else "")
+        self.vial_changed.emit(f"flipped {old_code} → {new_code}{suffix}")
+
+        if print_error is not None:
+            QMessageBox.warning(
+                self,
+                "Print failed",
+                f"Vial {new_code} was created, but the label did not print:\n\n"
+                f"{print_error}\n\n"
+                "You can re-print from this panel once the printer is back.",
+            )
+
+    def _decommission(self) -> None:
+        """Mark the loaded vial as end-of-life with no successor."""
+        if self._current_print_code is None or self._current_vial_id is None:
+            return
+        code = self._current_print_code
+        vial_id = self._current_vial_id
+
+        reason, ok = QInputDialog.getText(
+            self,
+            "Decommission vial",
+            f"Decommission {code}?\n\nOptional reason (e.g. 'contaminated'):",
+        )
+        if not ok:
+            return
+
+        self.decommission_btn.setEnabled(False)
+        try:
+            with Session(engine) as s:
+                decommission_vial(
+                    s,
+                    print_code=code,
+                    reason=reason.strip() or None,
+                )
+        except VialNotFoundError as e:
+            QMessageBox.warning(self, "Decommission failed", str(e))
+            self.decommission_btn.setEnabled(True)
+            return
+        except WorkflowError as e:
+            QMessageBox.critical(self, "Decommission failed", str(e))
+            self.decommission_btn.setEnabled(True)
+            return
+
+        with Session(engine) as s:
+            detail = vial_detail(s, vial_id)
+        if detail is not None:
+            self.show_detail(detail, f"decommissioned {code}")
+        self.vial_changed.emit(f"decommissioned {code}")
+
+    def _reactivate(self) -> None:
+        """Bring a decommissioned vial back to active.
+
+        Unusual operation — pops a hard warning that calls out any active
+        flip-descendants, because reactivating a vial that has an active
+        successor creates a forked lineage (two live vials sharing a
+        genealogy). The user must explicitly say Yes from a default-No
+        dialog.
+        """
+        if self._current_print_code is None or self._current_vial_id is None:
+            return
+        code = self._current_print_code
+        vial_id = self._current_vial_id
+
+        with Session(engine) as s:
+            descendants = active_flip_descendant_codes(s, vial_id)
+
+        if descendants:
+            warning = (
+                f"<b>Reactivate {code}?</b><br><br>"
+                "This vial was decommissioned, and there is still an active "
+                "descendant in its flip-chain:<br><br>"
+                f"&nbsp;&nbsp;<b>{', '.join(descendants)}</b><br><br>"
+                "Reactivating now will leave both vials active and produce a "
+                "<b>forked lineage</b>. Only do this if you really intend to "
+                "track two parallel branches.<br><br>"
+                "Continue?"
+            )
+        else:
+            warning = (
+                f"<b>Reactivate {code}?</b><br><br>"
+                "Reactivation is meant for undoing an accidental decommission. "
+                "The vial will return to ACTIVE state and will be selectable "
+                "for flips again.<br><br>"
+                "Are you sure?"
+            )
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Reactivate vial")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(warning)
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        self.reactivate_btn.setEnabled(False)
+        try:
+            with Session(engine) as s:
+                reactivate_vial(s, print_code=code)
+        except VialNotFoundError as e:
+            QMessageBox.warning(self, "Reactivate failed", str(e))
+            self.reactivate_btn.setEnabled(True)
+            return
+        except WorkflowError as e:
+            QMessageBox.critical(self, "Reactivate failed", str(e))
+            self.reactivate_btn.setEnabled(True)
+            return
+
+        with Session(engine) as s:
+            detail = vial_detail(s, vial_id)
+        if detail is not None:
+            self.show_detail(detail, f"reactivated {code}")
+        suffix = " (forked lineage)" if descendants else ""
+        self.vial_changed.emit(f"reactivated {code}{suffix}")
+
+    def _multiply(self) -> None:
+        """Flip the loaded vial into N children at once.
+
+        Asks for a count (2..MULTIPLY_MAX), decommissions the parent
+        once, creates N successor vials sharing the same genotype/owner/
+        org-unit, then prints each label sequentially with the same
+        Bluetooth settle delay CreateVialDialog uses. Print failures do
+        NOT roll back any DB row — failed labels can be re-printed from
+        the panel once the printer is back.
+        """
+        if self._current_print_code is None or self._current_vial_id is None:
+            return
+        old_code = self._current_print_code
+
+        count, ok = QInputDialog.getInt(
+            self,
+            "Multiply vial",
+            (
+                f"Flip {old_code} into how many vials?\n\n"
+                f"Allowed range: {MULTIPLY_MIN}–{MULTIPLY_MAX}. "
+                "Each child gets its own print code + label."
+            ),
+            MULTIPLY_DEFAULT,
+            MULTIPLY_MIN,
+            MULTIPLY_MAX,
+            1,
+        )
+        if not ok:
+            return
+
+        do_print = settings.printer_enabled and settings.printer_auto_print
+        if do_print:
+            choice = check_printer_or_ask(self)
+            if choice is ReconnectChoice.CANCEL:
+                return
+            do_print = choice is not ReconnectChoice.SKIP
+
+        self.multiply_btn.setEnabled(False)
+        try:
+            with Session(engine) as s:
+                created = multiply_vial(
+                    s, old_print_code=old_code, count=count
+                )
+                children = [(c.vial.id, c.vial.print_code, Path(str(c.label_path)))
+                            for c in created]
+        except VialNotFoundError as e:
+            QMessageBox.warning(self, "Multiply failed", str(e))
+            self.multiply_btn.setEnabled(True)
+            return
+        except WorkflowError as e:
+            QMessageBox.critical(self, "Multiply failed", str(e))
+            self.multiply_btn.setEnabled(True)
+            return
+
+        printed_count = 0
+        failed_count = 0
+        first_print_error: str | None = None
+        if do_print:
+            from ddb.printing.service import PrinterError, print_png
+
+            monitor = shared_monitor()
+            for i, (_, _, label_path) in enumerate(children):
+                if not label_path.exists():
+                    failed_count += 1
+                    if first_print_error is None:
+                        first_print_error = f"missing label PNG: {label_path}"
+                    continue
+                try:
+                    print_png(label_path.read_bytes())
+                    printed_count += 1
+                except (PrinterError, OSError, ConnectionError) as e:
+                    failed_count += 1
+                    if first_print_error is None:
+                        first_print_error = str(e)
+                    if monitor is not None:
+                        monitor.force_probe()
+                if i < len(children) - 1:
+                    time.sleep(_BATCH_PRINT_SETTLE_S)
+
+        first_child_id, _, _ = children[0]
+        with Session(engine) as s:
+            detail = vial_detail(s, first_child_id)
+        if detail is not None:
+            self.show_detail(detail, f"multiply {old_code} → {count} vials")
+
+        codes_csv = ", ".join(c[1] for c in children)
+        if do_print:
+            print_summary = f" [{printed_count}/{count} printed"
+            if failed_count:
+                print_summary += f", {failed_count} failed"
+            print_summary += "]"
+        else:
+            print_summary = ""
+        self.vial_changed.emit(
+            f"{old_code} → {count} vials: {codes_csv}{print_summary}"
+        )
+
+        if failed_count and first_print_error is not None:
+            QMessageBox.warning(
+                self,
+                "Print partially failed",
+                f"{failed_count} of {count} labels failed to print.\n\n"
+                f"First error: {first_print_error}\n\n"
+                "Vials are in the database; you can re-print individual "
+                "labels from the Scan tab's detail panel.",
+            )
