@@ -15,8 +15,13 @@ sync with the freezer — not for a multi-user SaaS.
   (17 × 54 mm DK-11204), one click from genotype + owner + org-unit.
 - **Scan vials** via USB webcam in the Scan tab; decoded payloads fetch
   the full detail panel (genotype notation, audit trail, lineage).
-- **Flip / decommission** vials with audit-logged state transitions; the
-  lineage graph keeps parent/child relations traversable.
+- **Flip, multiply, decommission, reactivate** vials with audit-logged
+  state transitions. `Multiply…` splits one parent into 2–12 children in
+  one click; `Reactivate` undoes accidental decommissions (with a warning
+  when active flip-descendants would create a forked lineage).
+- **Auditory scan confirmation**: a short chirp plays on every successful
+  QR decode (PipeWire/PulseAudio/ALSA player ladder; mute via
+  `DDB_SCAN_SOUND=0`).
 - **Import genotypes by stock-center ID** (Bloomington, Vienna/VDRC,
   Kyoto/DGGR, NIG-Fly, KDRC, FlyORF, NDSSC) from a locally-cached
   FlyBase catalog — no per-import web calls.
@@ -45,7 +50,7 @@ ddb gui
 Run the tests to confirm the install:
 
 ```bash
-pytest     # ~190 tests, ~7 s
+pytest     # ~204 tests, ~10 s
 ```
 
 ## Hardware supported
@@ -70,6 +75,7 @@ DDB_PRINTER_AUTO_PRINT=1
 
 # Scanner / camera defaults
 DDB_DEFAULT_CAMERA_ROLE=back        # or "front"
+DDB_SCAN_SOUND=1                    # audible 1-Up chirp on every QR decode
 
 # FlyBase genotype-import catalog
 DDB_FLYBASE_ENABLED=1
