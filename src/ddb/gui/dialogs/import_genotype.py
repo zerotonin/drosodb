@@ -239,9 +239,7 @@ class ImportGenotypeDialog(QDialog):
             existing = None
             if values.donor_strain_id:
                 existing = s.exec(
-                    select(Genotype).where(
-                        Genotype.donor_strain_id == values.donor_strain_id
-                    )
+                    select(Genotype).where(Genotype.donor_strain_id == values.donor_strain_id)
                 ).first()
 
         if existing is not None:
@@ -261,9 +259,7 @@ class ImportGenotypeDialog(QDialog):
                     f"id={existing.id} ({existing.name}) because the existing "
                     f"lab stock may be contaminated."
                 )
-                values.notes = (
-                    f"{values.notes}\n{marker}" if values.notes else marker
-                )
+                values.notes = f"{values.notes}\n{marker}" if values.notes else marker
 
         try:
             with Session(engine) as s:

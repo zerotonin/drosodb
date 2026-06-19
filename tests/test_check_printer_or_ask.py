@@ -37,9 +37,7 @@ def test_check_printer_or_ask_forwards_to_ensure_when_monitor_present(monkeypatc
         return ReconnectChoice.SKIP
 
     sentinel_status = object()
-    monkeypatch.setattr(
-        printer_reconnect, "shared_monitor", lambda: _FakeMonitor(sentinel_status)
-    )
+    monkeypatch.setattr(printer_reconnect, "shared_monitor", lambda: _FakeMonitor(sentinel_status))
     monkeypatch.setattr(printer_reconnect, "ensure_printer_or_ask", _fake_ensure)
 
     result = check_printer_or_ask("fake-parent")

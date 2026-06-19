@@ -179,8 +179,7 @@ def restart_service() -> ActionResult:
         proc = _run_systemctl()
         out = (proc.stdout + proc.stderr).decode(errors="replace")
         if proc.returncode != 0 and (
-            "Interactive authentication required" in out
-            or "Failed to connect to bus" in out
+            "Interactive authentication required" in out or "Failed to connect to bus" in out
         ):
             proc = _run_pkexec()
             out = (proc.stdout + proc.stderr).decode(errors="replace")

@@ -50,9 +50,7 @@ class MainWindow(QMainWindow):
         self.settings_tab.default_camera_changed.connect(self._on_default_camera_changed)
         # Show/hide the Genotypes-tab Import button when the catalog
         # master toggle flips, so the user doesn't have to restart.
-        self.settings_tab.catalog_enabled_changed.connect(
-            self.genotypes_tab.set_import_visible
-        )
+        self.settings_tab.catalog_enabled_changed.connect(self.genotypes_tab.set_import_visible)
 
         # Reload reports + genotypes when the tab becomes visible so data
         # stays fresh after creating/editing from elsewhere in the app.

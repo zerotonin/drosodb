@@ -38,7 +38,7 @@ def _no_sleep(monkeypatch):
     [
         "Waiting to connect to bluetoothd...",
         "bluetoothd on this host is not accepting connections",
-        "dbus[123]: assertion \"connection != NULL\" failed",
+        'dbus[123]: assertion "connection != NULL" failed',
     ],
 )
 def test_looks_like_daemon_wedged_matches(tail: str) -> None:

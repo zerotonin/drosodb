@@ -38,9 +38,7 @@ def main(argv: list[str]) -> int:
     try:
         s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
     except AttributeError:
-        sys.stderr.write(
-            "system python lacks AF_BLUETOOTH — no BlueZ headers at build time\n"
-        )
+        sys.stderr.write("system python lacks AF_BLUETOOTH — no BlueZ headers at build time\n")
         return 2
 
     s.settimeout(timeout)

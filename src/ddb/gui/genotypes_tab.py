@@ -369,9 +369,7 @@ class GenotypesTab(QWidget):
                 return
 
             try:
-                reactivate_genotype_in_stock(
-                    s, genotype_id=self._current_id, actor_id=actor_id
-                )
+                reactivate_genotype_in_stock(s, genotype_id=self._current_id, actor_id=actor_id)
             except WorkflowError as e:
                 QMessageBox.critical(self, "Could not re-activate", str(e))
                 return

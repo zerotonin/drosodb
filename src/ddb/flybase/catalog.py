@@ -27,9 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-FLYBASE_STOCKS_DIR = (
-    "https://s3ftp.flybase.org/releases/current/precomputed_files/stocks/"
-)
+FLYBASE_STOCKS_DIR = "https://s3ftp.flybase.org/releases/current/precomputed_files/stocks/"
 USER_AGENT = "ddb-drosodb/1.0 (+https://github.com/zerotonin/drosodb)"
 _RELEASE_RE = re.compile(r"stocks_(FB\d{4}_\d{2})\.tsv\.gz")
 
@@ -130,9 +128,7 @@ def read_postpone(paths: CatalogPaths) -> datetime | None:
 
 def write_postpone(paths: CatalogPaths, until: datetime) -> None:
     paths.root.mkdir(parents=True, exist_ok=True)
-    paths.postpone.write_text(
-        json.dumps({"until": until.astimezone(UTC).isoformat()})
-    )
+    paths.postpone.write_text(json.dumps({"until": until.astimezone(UTC).isoformat()}))
 
 
 def clear_postpone(paths: CatalogPaths) -> None:

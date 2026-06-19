@@ -96,8 +96,7 @@ def _build_index(tsv_gz_path: Path) -> _Index:
         ]
         if header[: len(expected)] != expected:
             raise ValueError(
-                f"{tsv_gz_path}: unexpected header {header!r}; "
-                f"expected prefix {expected!r}"
+                f"{tsv_gz_path}: unexpected header {header!r}; expected prefix {expected!r}"
             )
 
         for row in reader:
@@ -134,11 +133,7 @@ def _get_index(tsv_gz_path: Path) -> _Index:
     global _cache
     stat_ns = tsv_gz_path.stat().st_mtime_ns
     with _cache_lock:
-        if (
-            _cache is None
-            or _cache.source_path != tsv_gz_path
-            or _cache.source_mtime_ns != stat_ns
-        ):
+        if _cache is None or _cache.source_path != tsv_gz_path or _cache.source_mtime_ns != stat_ns:
             _cache = _build_index(tsv_gz_path)
         return _cache
 
@@ -155,9 +150,7 @@ def reset_cache() -> None:
 # ----------------------------------------------------------------------
 
 
-def find_record(
-    tsv_gz_path: Path, collection: str, stock_number: str
-) -> CatalogRecord | None:
+def find_record(tsv_gz_path: Path, collection: str, stock_number: str) -> CatalogRecord | None:
     """Look up a stock by its collection short-name + stock number.
 
     `collection` and `stock_number` are matched case-insensitively;
@@ -181,6 +174,4 @@ def available_collections(tsv_gz_path: Path) -> dict[str, int]:
     dropdown. Callers don't need to hold the index open.
     """
     index = _get_index(tsv_gz_path)
-    return dict(
-        sorted(index.collection_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    )
+    return dict(sorted(index.collection_counts.items(), key=lambda kv: (-kv[1], kv[0])))

@@ -138,9 +138,7 @@ def test_reactivate_after_flip_reports_active_descendants(session: Session) -> N
     visible in the event log."""
     user, geno = _seed(session)
     original = create_vial(session, genotype_id=geno.id, actor_id=user.id).vial
-    successor = flip_vial(
-        session, old_print_code=original.print_code, actor_id=user.id
-    ).vial
+    successor = flip_vial(session, old_print_code=original.print_code, actor_id=user.id).vial
     session.refresh(original)
     assert original.is_active is False
     assert successor.is_active is True
@@ -170,9 +168,7 @@ def test_multiply_creates_n_children_from_one_parent(session: Session) -> None:
     parent = create_vial(session, genotype_id=geno.id, actor_id=user.id).vial
     parent_code = parent.print_code
 
-    results = multiply_vial(
-        session, old_print_code=parent_code, count=4, actor_id=user.id
-    )
+    results = multiply_vial(session, old_print_code=parent_code, count=4, actor_id=user.id)
 
     assert len(results) == 4
     session.refresh(parent)
@@ -191,9 +187,7 @@ def test_multiply_creates_n_children_from_one_parent(session: Session) -> None:
         assert r.label_path.exists()
 
     # Audit: 1 decommission on parent + 4 flip_from events on children.
-    parent_events = session.exec(
-        select(AuditEvent).where(AuditEvent.entity_id == parent.id)
-    ).all()
+    parent_events = session.exec(select(AuditEvent).where(AuditEvent.entity_id == parent.id)).all()
     actions = [e.action for e in parent_events]
     assert actions.count("decommission") == 1
     decom = next(e for e in parent_events if e.action == "decommission")

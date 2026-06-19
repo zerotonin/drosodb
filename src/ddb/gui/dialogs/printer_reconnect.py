@@ -261,9 +261,7 @@ class PrinterReconnectDialog(QDialog):
             if looks_like_daemon_wedged(tail):
                 self._prompt_restart_service(tail)
                 return
-            QMessageBox.warning(
-                self, "Reset failed", tail.strip() or "Unknown error — see logs."
-            )
+            QMessageBox.warning(self, "Reset failed", tail.strip() or "Unknown error — see logs.")
             return
         self._set_busy("Bond cleared. Probing printer…")
         QTimer.singleShot(500, self._do_retry)
@@ -277,9 +275,7 @@ class PrinterReconnectDialog(QDialog):
             "Restart it now? (polkit will ask for your password.)"
         )
         msg.setDetailedText(tail.strip())
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if msg.exec() == QMessageBox.StandardButton.Yes:
             self._on_restart_service()
 

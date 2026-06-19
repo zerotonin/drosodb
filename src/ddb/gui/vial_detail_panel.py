@@ -437,9 +437,7 @@ class DetailPanel(QWidget):
         msg.setWindowTitle("Reactivate vial")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(warning)
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg.setDefaultButton(QMessageBox.StandardButton.No)
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
@@ -504,11 +502,10 @@ class DetailPanel(QWidget):
         self.multiply_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                created = multiply_vial(
-                    s, old_print_code=old_code, count=count
-                )
-                children = [(c.vial.id, c.vial.print_code, Path(str(c.label_path)))
-                            for c in created]
+                created = multiply_vial(s, old_print_code=old_code, count=count)
+                children = [
+                    (c.vial.id, c.vial.print_code, Path(str(c.label_path))) for c in created
+                ]
         except VialNotFoundError as e:
             QMessageBox.warning(self, "Multiply failed", str(e))
             self.multiply_btn.setEnabled(True)
@@ -557,9 +554,7 @@ class DetailPanel(QWidget):
             print_summary += "]"
         else:
             print_summary = ""
-        self.vial_changed.emit(
-            f"{old_code} → {count} vials: {codes_csv}{print_summary}"
-        )
+        self.vial_changed.emit(f"{old_code} → {count} vials: {codes_csv}{print_summary}")
 
         if failed_count and first_print_error is not None:
             QMessageBox.warning(

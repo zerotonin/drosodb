@@ -343,9 +343,7 @@ def active_flip_descendant_codes(session: Session, vial_id: int) -> list[str]:
     while frontier:
         next_frontier: list[int] = []
         for parent_id in frontier:
-            children = session.exec(
-                select(Vial).where(Vial.flipped_from_id == parent_id)
-            ).all()
+            children = session.exec(select(Vial).where(Vial.flipped_from_id == parent_id)).all()
             for child in children:
                 if child.id in seen:
                     continue
