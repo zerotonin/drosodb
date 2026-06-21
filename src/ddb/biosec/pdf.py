@@ -15,13 +15,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    NextPageTemplate,
     PageBreak,
+    PageTemplate,
     Paragraph,
-    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
@@ -31,22 +34,60 @@ from .data import BiosecReport, GenotypeRow, OwnerCount
 
 
 def render_biosec_pdf(report: BiosecReport, out_path: Path) -> Path:
-    """Write `report` to `out_path` as a PDF; return the path."""
+    """Write `report` to `out_path` as a PDF; return the path.
+
+    Layout uses two page templates: portrait A4 for the summary tables
+    (snapshot / period / owners / signature) and landscape A4 for the
+    genotype-listing annex, so the chromosomal notation (sometimes
+    very long — e.g. `P{ry[+t7.2]=lArB}Adcy1[rut-2080]/...`) has room
+    to render without ugly mid-token wraps.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doc = SimpleDocTemplate(
+    portrait_size = A4
+    landscape_size = landscape(A4)
+    margin = 18 * mm
+    top_margin = 16 * mm
+    bottom_margin = 16 * mm
+
+    doc = BaseDocTemplate(
         str(out_path),
-        pagesize=A4,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=16 * mm,
-        bottomMargin=16 * mm,
+        pagesize=portrait_size,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=top_margin,
+        bottomMargin=bottom_margin,
         title="DDB biosafety report",
         author="DDB",
     )
+    portrait_frame = Frame(
+        margin,
+        bottom_margin,
+        portrait_size[0] - 2 * margin,
+        portrait_size[1] - top_margin - bottom_margin,
+        id="portrait",
+    )
+    landscape_frame = Frame(
+        margin,
+        bottom_margin,
+        landscape_size[0] - 2 * margin,
+        landscape_size[1] - top_margin - bottom_margin,
+        id="landscape",
+    )
+    doc.addPageTemplates(
+        [
+            PageTemplate(id="portrait", frames=[portrait_frame], onPage=_footer),
+            PageTemplate(
+                id="landscape",
+                frames=[landscape_frame],
+                onPage=_footer,
+                pagesize=landscape_size,
+            ),
+        ]
+    )
     story = _build_story(report)
-    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    doc.build(story)
     return out_path
 
 
@@ -81,6 +122,7 @@ def _build_story(report: BiosecReport) -> list:
     story.append(_signature_block(styles))
 
     if report.genotype_listing:
+        story.append(NextPageTemplate("landscape"))
         story.append(PageBreak())
         story.append(
             Paragraph(
@@ -171,37 +213,50 @@ def _owner_table(owners: list[OwnerCount]) -> Table:
 
 
 def _genotype_listing_table(rows: list[GenotypeRow]) -> Table:
+    """Landscape-A4 table with one row per in-stock genotype.
+
+    Columns are arranged so the chromosomal notation (the "denoted
+    phenotype" in geneticist usage — what an inspector actually reads
+    to know what the strain is) gets the widest column and renders on
+    one or two lines instead of being squashed into mid-token wraps.
+    """
     styles = _styles()
     cell = styles["Cell"]
     header = [
         Paragraph("<b>Name</b>", cell),
-        Paragraph("<b>Notation (X ; II ; III)</b>", cell),
+        Paragraph("<b>Denoted phenotype (X ; II ; III [; IV])</b>", cell),
         Paragraph("<b>Donor #</b>", cell),
-        Paragraph("<b>Phenotype / notes</b>", cell),
+        Paragraph("<b>Phenotype</b>", cell),
+        Paragraph("<b>Notes</b>", cell),
         Paragraph("<b>WT</b>", cell),
         Paragraph("<b>Vials</b>", cell),
     ]
     data: list[list] = [header]
     for g in rows:
-        extras: list[str] = []
-        if g.phenotype:
-            extras.append(g.phenotype.strip())
-        if g.notes:
-            extras.append(g.notes.strip())
-        extras_text = " — ".join(extras) if extras else "—"
         data.append(
             [
                 Paragraph(_escape(g.name), cell),
                 Paragraph(_escape(g.notation), cell),
                 Paragraph(_escape(g.donor_strain_id or "—"), cell),
-                Paragraph(_escape(extras_text), cell),
+                Paragraph(_escape(g.phenotype.strip()) if g.phenotype else "—", cell),
+                Paragraph(_escape(g.notes.strip()) if g.notes else "—", cell),
                 "Y" if g.is_wildtype else "—",
                 str(g.active_vial_count),
             ]
         )
+    # Landscape A4 usable width = 297 - 36 = 261 mm.
+    # Name + Notation get the bulk; phenotype/notes share the remainder.
     t = Table(
         data,
-        colWidths=[28 * mm, 48 * mm, 18 * mm, None, 9 * mm, 14 * mm],
+        colWidths=[
+            32 * mm,  # Name
+            90 * mm,  # Denoted phenotype (notation)
+            16 * mm,  # Donor #
+            45 * mm,  # Phenotype
+            45 * mm,  # Notes
+            9 * mm,  # WT
+            14 * mm,  # Vials
+        ],
         repeatRows=1,
     )
     t.setStyle(_basic_table_style(header=True, last_col_right=True))
