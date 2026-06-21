@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QStatusBar, QTabWidget
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStatusBar, QTabWidget
 
 from ddb.config import settings
 from ddb.flybase import RefreshDecision, decide_refresh, paths_for, read_meta
 from ddb.flybase.catalog import read_postpone, write_postpone
 from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
 
+from .font_scale import (
+    FONT_SCALE_DEFAULT,
+    FONT_SCALE_STEP,
+    apply_font_scale,
+    clamp_font_scale,
+)
 from .genotypes_tab import GenotypesTab
 from .printer_status import PrinterStatusMonitor, install_shared_monitor
 from .reports_tab import ReportsTab
@@ -60,9 +68,48 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
 
+        # Live font-size shortcuts: Ctrl+= bumps up, Ctrl+- bumps down,
+        # Ctrl+0 resets. Ctrl+= doubles as Ctrl++ on most keyboards where
+        # + requires Shift; we register both so it works regardless.
+        QShortcut(QKeySequence("Ctrl+="), self, activated=self._font_bigger)
+        QShortcut(QKeySequence("Ctrl++"), self, activated=self._font_bigger)
+        QShortcut(QKeySequence("Ctrl+-"), self, activated=self._font_smaller)
+        QShortcut(QKeySequence("Ctrl+0"), self, activated=self._font_reset)
+
+        # Settings-tab slider → live retune.
+        self.settings_tab.font_scale_changed.connect(self.set_font_scale)
+
         # Deferred: ask about catalog refresh after the window is on
         # screen so the user sees DDB first, not a surprise dialog.
         QTimer.singleShot(500, self._check_catalog_refresh)
+
+    # ------------------------------------------------------------------
+    # Live font-size scaling — keyboard + Settings tab share this path
+    # ------------------------------------------------------------------
+
+    def _font_bigger(self) -> None:
+        self.set_font_scale(settings.gui_font_scale + FONT_SCALE_STEP)
+
+    def _font_smaller(self) -> None:
+        self.set_font_scale(settings.gui_font_scale - FONT_SCALE_STEP)
+
+    def _font_reset(self) -> None:
+        self.set_font_scale(FONT_SCALE_DEFAULT)
+
+    def set_font_scale(self, scale: float) -> None:
+        """Single entry point for both keyboard and Settings-tab paths.
+        Applies live, persists to .env, syncs the Settings-tab spinbox,
+        and updates the status bar with the current scale."""
+        clamped = clamp_font_scale(scale)
+        app = QApplication.instance()
+        if app is not None:
+            apply_font_scale(app, clamped)
+        settings.gui_font_scale = clamped
+        # Mirror back to Settings tab without re-firing the signal.
+        self.settings_tab.set_font_scale_silently(clamped)
+        with contextlib.suppress(OSError):
+            self.settings_tab.persist_font_scale(clamped)
+        self.statusBar().showMessage(f"Font scale: {clamped:.2f}×", 2000)
 
     def _on_default_camera_changed(self, role: str) -> None:
         idx = self.scan_tab.role_box.findText(role)

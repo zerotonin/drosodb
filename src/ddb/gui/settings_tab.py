@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +40,13 @@ from ddb.db import engine
 from ddb.flybase.catalog import paths_for, read_meta
 from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
 from ddb.gui.dialogs.printer_reconnect import PrinterReconnectDialog
+from ddb.gui.font_scale import (
+    FONT_SCALE_DEFAULT,
+    FONT_SCALE_MAX,
+    FONT_SCALE_MIN,
+    FONT_SCALE_STEP,
+    clamp_font_scale,
+)
 from ddb.gui.printer_status import PrinterStatusLight, shared_monitor
 from ddb.models import Donor, OrgUnit, User
 
@@ -69,11 +78,13 @@ class SettingsTab(QWidget):
     debug_changed = Signal(bool)
     default_camera_changed = Signal(str)
     catalog_enabled_changed = Signal(bool)
+    font_scale_changed = Signal(float)
 
     def __init__(self) -> None:
         super().__init__()
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self._build_font_group())
         layout.addWidget(self._build_debug_group())
         layout.addWidget(self._build_printer_group())
         layout.addWidget(self._build_catalog_group())
@@ -393,6 +404,81 @@ class SettingsTab(QWidget):
                 f"Setting applied in-session but not persisted: {e}",
             )
         self.default_camera_changed.emit(role)
+
+    # ------------------------------------------------------------------
+    # Font size — slider + spinbox; persists to .env; live retune
+    # ------------------------------------------------------------------
+
+    def _build_font_group(self) -> QGroupBox:
+        box = QGroupBox("Font size")
+
+        current = clamp_font_scale(settings.gui_font_scale)
+        # Slider is integer-only — encode 0.7..2.0 as 70..200 (×100).
+        self.font_slider = QSlider(Qt.Orientation.Horizontal)
+        self.font_slider.setRange(int(FONT_SCALE_MIN * 100), int(FONT_SCALE_MAX * 100))
+        self.font_slider.setSingleStep(int(FONT_SCALE_STEP * 100))
+        self.font_slider.setPageStep(int(FONT_SCALE_STEP * 100 * 2))
+        self.font_slider.setValue(int(current * 100))
+
+        self.font_spin = QDoubleSpinBox()
+        self.font_spin.setRange(FONT_SCALE_MIN, FONT_SCALE_MAX)
+        self.font_spin.setSingleStep(FONT_SCALE_STEP)
+        self.font_spin.setDecimals(2)
+        self.font_spin.setSuffix("×")
+        self.font_spin.setValue(current)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setToolTip(f"Restore the default scale ({FONT_SCALE_DEFAULT:.2f}×).")
+        reset_btn.clicked.connect(lambda: self._set_font_scale_from_user(FONT_SCALE_DEFAULT))
+
+        self.font_slider.valueChanged.connect(lambda v: self._set_font_scale_from_user(v / 100.0))
+        self.font_spin.valueChanged.connect(self._set_font_scale_from_user)
+
+        tip = QLabel(
+            "<i>Scales every label, table, and dialog in DDB. Live — "
+            "no restart needed. Shortcuts: <b>Ctrl+=</b> bigger, "
+            "<b>Ctrl+−</b> smaller, <b>Ctrl+0</b> reset.</i>"
+        )
+        tip.setStyleSheet("color: #666;")
+        tip.setWordWrap(True)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Scale:"))
+        row.addWidget(self.font_slider, 1)
+        row.addWidget(self.font_spin)
+        row.addWidget(reset_btn)
+
+        lo = QVBoxLayout(box)
+        lo.addLayout(row)
+        lo.addWidget(tip)
+        return box
+
+    def _set_font_scale_from_user(self, scale: float) -> None:
+        """Slider/spinbox/Reset → notify MainWindow via signal.
+        MainWindow does the actual apply + persist + status-bar message and
+        calls back into `set_font_scale_silently` to keep widgets in sync."""
+        clamped = clamp_font_scale(scale)
+        # Avoid firing on a noop (also prevents echo from set_font_scale_silently).
+        if abs(clamped - settings.gui_font_scale) < 1e-3:
+            return
+        self.font_scale_changed.emit(clamped)
+
+    def set_font_scale_silently(self, scale: float) -> None:
+        """Reflect the current scale in the widgets without re-emitting.
+        Called by MainWindow after a keyboard shortcut adjusts the scale."""
+        clamped = clamp_font_scale(scale)
+        for w in (self.font_slider, self.font_spin):
+            w.blockSignals(True)
+        try:
+            self.font_slider.setValue(int(clamped * 100))
+            self.font_spin.setValue(clamped)
+        finally:
+            for w in (self.font_slider, self.font_spin):
+                w.blockSignals(False)
+
+    def persist_font_scale(self, scale: float) -> None:
+        """Write the scale back to .env so it survives restart."""
+        _upsert_env_var(_env_path(), "DDB_GUI_FONT_SCALE", f"{clamp_font_scale(scale):.2f}")
 
     # ------------------------------------------------------------------
     # Debug toggle

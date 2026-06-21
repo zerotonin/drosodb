@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # Off by default so biologists aren't confronted with debug buttons.
     gui_debug: bool = False
 
+    # Multiplier applied to the GUI font size at startup. 1.0 = system
+    # default (~10pt on Linux). Users can bump this via the Settings tab
+    # or live with Ctrl+= / Ctrl+- (Ctrl+0 resets). Clamped to [0.7, 2.0]
+    # — below 0.7 the labels collapse, above 2.0 the dialogs overflow on
+    # most laptop displays.
+    gui_font_scale: float = 1.0
+
     # Which camera role the Scan tab starts on. Users can still switch
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"

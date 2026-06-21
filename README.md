@@ -22,6 +22,10 @@ sync with the freezer — not for a multi-user SaaS.
 - **Auditory scan confirmation**: a short chirp plays on every successful
   QR decode (PipeWire/PulseAudio/ALSA player ladder; mute via
   `DDB_SCAN_SOUND=0`).
+- **Live font-size adjuster**: scale every label and dialog in the GUI on
+  the fly. Settings tab → "Font size" slider, or keyboard shortcuts
+  `Ctrl+=` (bigger), `Ctrl+-` (smaller), `Ctrl+0` (reset). Persists to
+  `DDB_GUI_FONT_SCALE`, clamped to 0.7×–2.0×.
 - **Import genotypes by stock-center ID** (Bloomington, Vienna/VDRC,
   Kyoto/DGGR, NIG-Fly, KDRC, FlyORF, NDSSC) from a locally-cached
   FlyBase catalog — no per-import web calls.
@@ -56,7 +60,7 @@ ddb gui
 Run the tests to confirm the install:
 
 ```bash
-pytest     # ~213 tests, ~10 s
+pytest     # ~218 tests, ~10 s
 ```
 
 ## Hardware supported
@@ -82,6 +86,9 @@ DDB_PRINTER_AUTO_PRINT=1
 # Scanner / camera defaults
 DDB_DEFAULT_CAMERA_ROLE=back        # or "front"
 DDB_SCAN_SOUND=1                    # audible 1-Up chirp on every QR decode
+
+# GUI tweaks
+DDB_GUI_FONT_SCALE=1.00             # 0.7-2.0; live via Ctrl+=/Ctrl+-/Ctrl+0
 
 # FlyBase genotype-import catalog
 DDB_FLYBASE_ENABLED=1
