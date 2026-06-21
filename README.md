@@ -27,6 +27,12 @@ sync with the freezer — not for a multi-user SaaS.
   FlyBase catalog — no per-import web calls.
 - **Reports** tab: search/filter by genotype, owner, org-unit, donor,
   generation; export lineage as CSV.
+- **Biosafety PDF report**: one-click PDF for institutional filings.
+  Snapshot counts (active / decommissioned vials, in-stock / dropped
+  genotypes), in-period activity (creates, flips, decommissions,
+  reactivations), per-owner active-vial breakdown, signature block,
+  and a full active-genotype annex. CLI takes `--annual YYYY`,
+  `--from`, `--to`, `--org-unit`, `--owner`.
 - **Auditable**: every mutation writes an `AuditEvent` with actor, action,
   and before/after payload.
 - **Typer CLI** mirrors the GUI for scripted workflows (`ddb vial create`,
@@ -50,7 +56,7 @@ ddb gui
 Run the tests to confirm the install:
 
 ```bash
-pytest     # ~204 tests, ~10 s
+pytest     # ~213 tests, ~10 s
 ```
 
 ## Hardware supported
@@ -101,6 +107,8 @@ src/ddb/
   scanner/      QR decode (zxing + OpenCV fallback), payload parser,
                 DB lookup by print-code or FBst
   camera/       V4L2 enumeration, role assignment, preview capture
+  biosec/       biosafety PDF reports — data gatherer (pure SQL) +
+                reportlab renderer; entry point: `ddb report biosec`
   flybase/      local FlyBase stocks-catalog cache (download, lookup,
                 genotype parser, refresh scheduler, collection→donor mapping)
   gui/          PySide6: Scan / Reports / Genotypes / Settings tabs,
@@ -115,7 +123,7 @@ src/ddb/
   qr.py         compact "DDB:<code>" payload + PNG builder
   lineage.py    vial lineage graph + CSV export
   reports.py    search + detail queries
-tests/          ~190 unit + integration tests
+tests/          ~213 unit + integration tests
 alembic/        SQLite migrations
 docs/           design docs + operations walkthrough
 ```
@@ -138,6 +146,10 @@ ddb vial lineage <PRINT_CODE> --csv lineage.csv
 ddb import-genotypes path/to/FlyStockTable.csv
 ddb printer status                   # ESC i S probe via configured backend
 ddb printer print-png path/to/label.png
+
+ddb report biosec report.pdf                       # rolling 3 months, whole DB
+ddb report biosec report.pdf --annual 2025         # full calendar year
+ddb report biosec lab_a.pdf --org-unit "Lab A"     # one lab only
 ```
 
 Run `ddb --help` or `ddb <subcommand> --help` for the full set.
