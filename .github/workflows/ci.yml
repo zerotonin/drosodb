@@ -55,3 +55,10 @@ jobs:
           # Keep the GUI smoke test off any real display; Qt ships this
           # plugin with PySide6 so we don't need xvfb.
           QT_QPA_PLATFORM: offscreen
+          # Point at the same migrated DB the previous step set up.
+          # Tests that use the `session` fixture create their own
+          # in-memory engine in conftest and ignore this; the GUI smoke
+          # tests use the global engine and therefore need a real,
+          # schema-bearing file behind it. Without this, ReportsTab's
+          # auto-load on construction crashes with "no such table: vial".
+          DDB_DATABASE_URL: sqlite:///./ci.sqlite3
