@@ -16,13 +16,17 @@ later means one button + one method.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -100,6 +104,12 @@ class ReportsTab(QWidget):
         self.all_btn = QPushButton("All vials")
         self.decomm_btn = QPushButton("Decommissioned")
         self.mine_btn = QPushButton(f"{settings.default_owner_username}'s vials")
+        self.biosec_btn = QPushButton("Biosafety PDF…")
+        self.biosec_btn.setToolTip(
+            "Generate a one-staple PDF report covering snapshot counts "
+            "and activity over the last 3 months (snapshot + per-owner + "
+            "full active-genotype listing). Saved wherever you choose."
+        )
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter by genotype name…")
@@ -111,6 +121,8 @@ class ReportsTab(QWidget):
         controls.addSpacing(24)
         controls.addWidget(QLabel("Filter:"))
         controls.addWidget(self.search_edit, stretch=1)
+        controls.addSpacing(12)
+        controls.addWidget(self.biosec_btn)
 
         self.table = QTableView()
         self.model = VialRowTableModel()
@@ -138,6 +150,7 @@ class ReportsTab(QWidget):
         self.all_btn.clicked.connect(self._show_all)
         self.decomm_btn.clicked.connect(self._show_decommissioned)
         self.mine_btn.clicked.connect(self._show_mine)
+        self.biosec_btn.clicked.connect(self._generate_biosec_pdf)
         self.search_edit.textChanged.connect(self._refresh)
 
         # Remember which preset is active so typing in the filter re-applies
@@ -182,3 +195,43 @@ class ReportsTab(QWidget):
         self.model.set_rows(rows)
         filter_msg = f" matching {needle!r}" if needle else ""
         self.status.setText(f"{label}{filter_msg}: {len(rows)} row{'s' if len(rows) != 1 else ''}.")
+
+    # --- Biosafety PDF -------------------------------------------------
+
+    def _generate_biosec_pdf(self) -> None:
+        """One-click biosafety PDF — last 3 months over the whole DB.
+
+        CLI's `ddb report biosec` exposes the full knob set (--from / --to,
+        --annual, --org-unit, --owner); this button is the always-works
+        default for the user who just wants to staple something in.
+        """
+        # Lazy import so the GUI module still loads if reportlab is absent.
+        from ddb.biosec import gather_biosec_report, period_last_n_months
+        from ddb.biosec.pdf import render_biosec_pdf
+
+        now = datetime.now(UTC)
+        suggested = f"biosec_{now.date().isoformat()}.pdf"
+        out, _ = QFileDialog.getSaveFileName(self, "Save biosafety PDF", suggested, "PDF (*.pdf)")
+        if not out:
+            return
+
+        period_from, period_to = period_last_n_months(now, months=3)
+        try:
+            with Session(engine) as s:
+                report = gather_biosec_report(s, from_=period_from, to=period_to, now=now)
+            path = render_biosec_pdf(report, out)
+        except OSError as e:
+            QMessageBox.critical(self, "PDF write failed", str(e))
+            return
+
+        snap = report.snapshot
+        QMessageBox.information(
+            self,
+            "Biosafety PDF written",
+            f"Wrote {path}\n\n"
+            f"Period: {period_from.date()} to {period_to.date()}\n"
+            f"Active vials: {snap.active_vials}\n"
+            f"In-stock genotypes: {snap.in_stock_genotypes}\n"
+            f"Decommissioned vials (cumulative): {snap.decommissioned_vials}\n"
+            f"Dropped genotypes: {snap.dropped_genotypes}",
+        )

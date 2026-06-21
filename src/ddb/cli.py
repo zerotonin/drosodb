@@ -27,10 +27,12 @@ camera_app = typer.Typer(help="Detect, assign, and preview cameras.")
 vial_app = typer.Typer(help="Vial workflows: create, flip.")
 genotype_app = typer.Typer(help="Inspect known genotypes.")
 printer_app = typer.Typer(help="Brother QL-series label printer.")
+report_app = typer.Typer(help="Stock-book reports for biosafety filings.")
 app.add_typer(camera_app, name="camera")
 app.add_typer(vial_app, name="vial")
 app.add_typer(genotype_app, name="genotype")
 app.add_typer(printer_app, name="printer")
+app.add_typer(report_app, name="report")
 
 
 @app.command("init-db")
@@ -541,6 +543,96 @@ def scan_cmd(
                 f"    database_id mismatch: label says {parsed.database_id}, "
                 f"this install is {settings.database_id}"
             )
+
+
+@report_app.command("biosec")
+def report_biosec_cmd(
+    out: Path = typer.Argument(..., help="PDF path to write."),
+    from_: str | None = typer.Option(
+        None,
+        "--from",
+        help="Reporting-period start (YYYY-MM-DD). Default: 3 months before today.",
+    ),
+    to: str | None = typer.Option(
+        None, "--to", help="Reporting-period end (YYYY-MM-DD). Default: today."
+    ),
+    annual: int | None = typer.Option(
+        None,
+        "--annual",
+        help="Convenience: cover the full calendar year YYYY (overrides --from/--to).",
+    ),
+    org_unit: str | None = typer.Option(
+        None, "--org-unit", help="Restrict vial counts to a single org unit by name."
+    ),
+    owner: str | None = typer.Option(
+        None, "--owner", help="Restrict vial counts to a single owner by username."
+    ),
+) -> None:
+    """Generate the biosafety PDF — staple it into the lab binder.
+
+    Defaults to a rolling 3-month window covering the whole database.
+    The PDF lists snapshot counts, in-period activity, an owner
+    breakdown, a signature block, and an annex with the full active
+    genotype listing.
+    """
+    from datetime import UTC, datetime
+
+    from ddb.biosec import (
+        gather_biosec_report,
+        period_from_annual,
+        period_last_n_months,
+    )
+    from ddb.biosec.pdf import render_biosec_pdf
+    from ddb.models import OrgUnit, User
+
+    now = datetime.now(UTC)
+    if annual is not None:
+        period_from, period_to = period_from_annual(annual)
+    elif from_ is None and to is None:
+        period_from, period_to = period_last_n_months(now, months=3)
+    else:
+        period_from = (
+            datetime.fromisoformat(from_).replace(tzinfo=UTC)
+            if from_
+            else period_last_n_months(now, months=3)[0]
+        )
+        period_to = datetime.fromisoformat(to).replace(tzinfo=UTC) if to else now
+
+    with Session(engine) as session:
+        org_unit_id = None
+        if org_unit is not None:
+            row = session.exec(select(OrgUnit).where(OrgUnit.name == org_unit)).first()
+            if row is None:
+                typer.echo(f"No org unit named {org_unit!r}.", err=True)
+                raise typer.Exit(1)
+            org_unit_id = row.id
+
+        owner_id = None
+        if owner is not None:
+            row = session.exec(select(User).where(User.username == owner)).first()
+            if row is None:
+                typer.echo(f"No user with username {owner!r}.", err=True)
+                raise typer.Exit(1)
+            owner_id = row.id
+
+        report = gather_biosec_report(
+            session,
+            from_=period_from,
+            to=period_to,
+            org_unit_id=org_unit_id,
+            owner_id=owner_id,
+            now=now,
+        )
+
+    path = render_biosec_pdf(report, out)
+    typer.echo(f"Wrote biosafety report → {path}")
+    typer.echo(
+        f"  period:   {period_from.date()} .. {period_to.date()}\n"
+        f"  scope:    {report.org_unit_name or 'whole database'}"
+        f"{' (owner: ' + report.owner_username + ')' if report.owner_username else ''}\n"
+        f"  active:   {report.snapshot.active_vials} vials, "
+        f"{report.snapshot.in_stock_genotypes} genotypes"
+    )
 
 
 if __name__ == "__main__":
