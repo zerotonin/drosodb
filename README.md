@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml/badge.svg)](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml)
 [![Docs](https://github.com/zerotonin/drosodb/actions/workflows/docs.yml/badge.svg)](https://zerotonin.github.io/drosodb/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 
 Single-user lab system for tracking *Drosophila* vials with QR-coded labels,
@@ -19,6 +20,11 @@ sync with the freezer — not for a multi-user SaaS.
   state transitions. `Multiply…` splits one parent into 2–12 children in
   one click; `Reactivate` undoes accidental decommissions (with a warning
   when active flip-descendants would create a forked lineage).
+- **Flip all active vials of a genotype** in one click (Genotypes tab →
+  `Flip all active…`). Every currently-active vial of the chosen strain
+  is decommissioned and gets one successor + label in a single
+  transaction; the last-used genotype is pre-selected so a repeat cycle
+  (e.g. weekly dark-flies flip) is one motion.
 - **Auditory scan confirmation**: a short chirp plays on every successful
   QR decode (PipeWire/PulseAudio/ALSA player ladder; mute via
   `DDB_SCAN_SOUND=0`).
@@ -60,7 +66,7 @@ ddb gui
 Run the tests to confirm the install:
 
 ```bash
-pytest     # ~218 tests, ~10 s
+pytest     # ~226 tests, ~10 s
 ```
 
 ## Hardware supported
@@ -130,7 +136,7 @@ src/ddb/
   qr.py         compact "DDB:<code>" payload + PNG builder
   lineage.py    vial lineage graph + CSV export
   reports.py    search + detail queries
-tests/          ~213 unit + integration tests
+tests/          ~226 unit + integration tests
 alembic/        SQLite migrations
 docs/           design docs + operations walkthrough
 ```
