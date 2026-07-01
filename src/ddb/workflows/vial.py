@@ -296,6 +296,102 @@ def multiply_vial(
     return results
 
 
+def flip_active_vials_for_genotype(
+    session: Session,
+    *,
+    genotype_id: int,
+    actor_id: int | None = None,
+) -> list[CreatedVial]:
+    """Flip every currently-active vial of `genotype_id` in one transaction.
+
+    Each active parent is decommissioned and a single successor is created
+    with the same owner and org unit — equivalent to calling `flip_vial`
+    on each print code, except that the whole batch commits together so a
+    crash mid-loop cannot leave the DB half-flipped. Audit events for
+    every parent/child pair are written in the same commit.
+
+    Returns the created children in the same order the parents were
+    found. Empty when the genotype has no active vials (caller decides
+    whether to treat that as an error or a no-op).
+
+    Used by the "Flip all active…" button on the Genotypes tab. Bart's
+    dark-flies workflow flips 20–40 vials per cycle; running them one at
+    a time through the per-vial flip path would burn 20–40 commits with
+    no atomicity across them. One transaction, one batch.
+    """
+    genotype = session.get(Genotype, genotype_id)
+    if genotype is None:
+        raise GenotypeNotFoundError(f"genotype_id={genotype_id} does not exist")
+
+    parents = list(
+        session.exec(
+            select(Vial)
+            .where(Vial.genotype_id == genotype_id, Vial.is_active.is_(True))
+            .order_by(Vial.id)
+        ).all()
+    )
+    if not parents:
+        return []
+
+    now = datetime.now(UTC)
+    children: list[Vial] = []
+    for parent in parents:
+        parent.is_active = False
+        parent.decommissioned_at = now
+        session.add(parent)
+        child = Vial(
+            print_code=_unique_print_code(session),
+            genotype_id=parent.genotype_id,
+            owner_id=parent.owner_id,
+            org_unit_id=parent.org_unit_id,
+            flipped_from_id=parent.id,
+            generation=parent.generation + 1,
+        )
+        session.add(child)
+        children.append(child)
+    session.flush()  # populate child ids before we reference them in audit payloads
+
+    events: list[AuditEvent] = []
+    for parent, child in zip(parents, children, strict=True):
+        events.append(
+            AuditEvent(
+                actor_id=actor_id,
+                entity_type="vial",
+                entity_id=parent.id,
+                action="decommission",
+                payload={
+                    "reason": "flip_all_for_genotype",
+                    "new_vial_id": child.id,
+                    "genotype_id": genotype_id,
+                },
+            )
+        )
+        events.append(
+            AuditEvent(
+                actor_id=actor_id,
+                entity_type="vial",
+                entity_id=child.id,
+                action="flip_from",
+                payload={
+                    "from_vial_id": parent.id,
+                    "from_print_code": parent.print_code,
+                    "print_code": child.print_code,
+                    "genotype_id": child.genotype_id,
+                    "batch": "flip_all_for_genotype",
+                },
+            )
+        )
+    session.add_all(events)
+    session.commit()
+
+    results: list[CreatedVial] = []
+    for child in children:
+        session.refresh(child)
+        label_path = _render_and_save_label(session, child, genotype)
+        results.append(CreatedVial(vial=child, label_path=label_path))
+    return results
+
+
 def decommission_vial(
     session: Session,
     *,

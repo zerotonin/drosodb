@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # most laptop displays.
     gui_font_scale: float = 1.0
 
+    # Which genotype the "Flip all active vials for a genotype" dialog
+    # preselects on open. Persisted so the common single-strain workflow
+    # (e.g. the dark-flies cycle) is one-click. 0 = no last choice.
+    last_flip_all_genotype_id: int = 0
+
     # Which camera role the Scan tab starts on. Users can still switch
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"
