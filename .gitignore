@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 .env.local
+# machine-specific paths — copied from local_paths.template.json
+local_paths.json
 *.db
 *.sqlite
 *.sqlite3

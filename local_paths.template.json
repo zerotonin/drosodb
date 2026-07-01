@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy this file to local_paths.json (which is gitignored) and edit for your machine. See README section 'Multi-user on one tablet' for the setup script and permissions model. The 'active_profile' key picks which block below is applied at import time; env vars (DDB_DATABASE_URL, DDB_DATA_DIR) still win over both.",
+  "active_profile": "local",
+  "profiles": {
+    "local": {
+      "_comment": "Single-user dev install. Nulls fall through to the in-repo defaults (ddb.sqlite3 + ./data/ under the checkout). Leave as-is if you just want one machine, one user.",
+      "data_root": null,
+      "database_url": null
+    },
+    "shared_tablet": {
+      "_comment": "Shared lab tablet. Point both keys at /srv/ddb/ (created by scripts/setup_shared_sqlite.sh). Every OS user in the 'ddb' group can read/write; the DDB user identity is derived from the Linux username at launch.",
+      "data_root": "/srv/ddb",
+      "database_url": "sqlite:////srv/ddb/ddb.sqlite3"
+    }
+  }
+}
