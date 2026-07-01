@@ -29,7 +29,7 @@ from sqlmodel import Session, select
 from ddb.config import settings
 from ddb.db import engine
 from ddb.genotype import format_notation
-from ddb.gui.dialogs import CreateGenotypeDialog, ImportGenotypeDialog
+from ddb.gui.dialogs import CreateGenotypeDialog, FlipGenotypeDialog, ImportGenotypeDialog
 from ddb.gui.dirty_tracker import DirtyTracker
 from ddb.gui.genotype_form import GenotypeForm, ensure_donor
 from ddb.models import Genotype, User, Vial
@@ -61,14 +61,23 @@ class GenotypesTab(QWidget):
         )
         self.import_btn.setVisible(settings.flybase_enabled)
         self.refresh_btn = QPushButton("Reload")
+        self.flip_all_btn = QPushButton("Flip all active…")
+        self.flip_all_btn.setToolTip(
+            "Bulk-flip: choose a genotype, then decommission every "
+            "currently-active vial of that strain and create one "
+            "successor + label per vial. Last-used genotype is "
+            "pre-selected — one click for a repeat cycle."
+        )
         self.new_btn.clicked.connect(self._open_new_dialog)
         self.import_btn.clicked.connect(self._open_import_dialog)
         self.refresh_btn.clicked.connect(self.reload)
+        self.flip_all_btn.clicked.connect(self._open_flip_all_dialog)
 
         left_btns = QHBoxLayout()
         left_btns.addWidget(self.new_btn)
         left_btns.addWidget(self.import_btn)
         left_btns.addWidget(self.refresh_btn)
+        left_btns.addWidget(self.flip_all_btn)
         left_btns.addStretch()
 
         left = QVBoxLayout()
@@ -386,6 +395,36 @@ class GenotypesTab(QWidget):
             return
         # Select the newly-created row after reload.
         self._current_id = dlg.result.genotype_id
+        self.reload()
+
+    def _open_flip_all_dialog(self) -> None:
+        """Open FlipGenotypeDialog and, if it flipped anything, surface
+        the batch summary and reload the list so vial-count columns
+        pick up the change."""
+        dlg = FlipGenotypeDialog(self)
+        if dlg.exec() != dlg.DialogCode.Accepted or dlg.result is None:
+            return
+
+        r = dlg.result
+        n = len(r.child_print_codes)
+        if n == 0:
+            QMessageBox.information(
+                self,
+                "Nothing to flip",
+                f"<b>{r.genotype_name}</b> has no active vials right now.",
+            )
+        else:
+            summary = (
+                f"Flipped <b>{n}</b> vial{'s' if n != 1 else ''} of "
+                f"<b>{r.genotype_name}</b>."
+            )
+            if r.printed_count or r.failed_count:
+                summary += (
+                    f"<br><br>Printed: <b>{r.printed_count}</b> / {n}"
+                )
+                if r.failed_count:
+                    summary += f" — <b>{r.failed_count}</b> failed"
+            QMessageBox.information(self, "Flip all — done", summary)
         self.reload()
 
     def _open_import_dialog(self) -> None:

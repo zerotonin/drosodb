@@ -1,5 +1,6 @@
 from .create_genotype import CreateGenotypeDialog
 from .create_vial import CreateVialDialog
+from .flip_genotype import FlipGenotypeDialog, FlipGenotypeResult
 from .import_genotype import ImportGenotypeDialog
 from .printer_reconnect import (
     PrinterReconnectDialog,
@@ -11,6 +12,8 @@ from .printer_reconnect import (
 __all__ = [
     "CreateGenotypeDialog",
     "CreateVialDialog",
+    "FlipGenotypeDialog",
+    "FlipGenotypeResult",
     "ImportGenotypeDialog",
     "PrinterReconnectDialog",
     "ReconnectChoice",
