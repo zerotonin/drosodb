@@ -27,12 +27,13 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ddb.config import settings
+from ddb.current_user import current_user_id
 from ddb.db import engine
 from ddb.genotype import format_notation
 from ddb.gui.dialogs import CreateGenotypeDialog, FlipGenotypeDialog, ImportGenotypeDialog
 from ddb.gui.dirty_tracker import DirtyTracker
 from ddb.gui.genotype_form import GenotypeForm, ensure_donor
-from ddb.models import Genotype, User, Vial
+from ddb.models import Genotype, Vial
 from ddb.workflows import (
     GenotypeStillHasActiveVialsError,
     WorkflowError,
@@ -269,10 +270,7 @@ class GenotypesTab(QWidget):
             return
 
         with Session(engine) as s:
-            keeper = s.exec(
-                select(User).where(User.username == settings.default_owner_username)
-            ).first()
-            actor_id = keeper.id if keeper else None
+            actor_id = current_user_id(s)
 
             donor_id = ensure_donor(s, values)
 
@@ -307,10 +305,7 @@ class GenotypesTab(QWidget):
             if g is None:
                 return
             name = g.name
-            keeper = s.exec(
-                select(User).where(User.username == settings.default_owner_username)
-            ).first()
-            actor_id = keeper.id if keeper else None
+            actor_id = current_user_id(s)
 
             # Confirm first — this is a user-visible state change.
             ok = QMessageBox.question(
@@ -361,10 +356,7 @@ class GenotypesTab(QWidget):
             if g is None:
                 return
             name = g.name
-            keeper = s.exec(
-                select(User).where(User.username == settings.default_owner_username)
-            ).first()
-            actor_id = keeper.id if keeper else None
+            actor_id = current_user_id(s)
 
             ok = QMessageBox.question(
                 self,

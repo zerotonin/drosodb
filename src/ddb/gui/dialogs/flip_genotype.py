@@ -35,10 +35,11 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ddb.config import settings
+from ddb.current_user import current_user_id
 from ddb.db import engine
 from ddb.gui.dialogs.printer_reconnect import ReconnectChoice, check_printer_or_ask
 from ddb.gui.printer_status import shared_monitor
-from ddb.models import Genotype, User, Vial
+from ddb.models import Genotype, Vial
 from ddb.workflows import (
     GenotypeNotFoundError,
     WorkflowError,
@@ -200,12 +201,8 @@ class FlipGenotypeDialog(QDialog):
         self.flip_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                keeper = s.exec(
-                    select(User).where(User.username == settings.default_owner_username)
-                ).first()
-                actor_id = keeper.id if keeper else None
                 created = flip_active_vials_for_genotype(
-                    s, genotype_id=genotype_id, actor_id=actor_id
+                    s, genotype_id=genotype_id, actor_id=current_user_id(s)
                 )
                 children = [(c.vial.print_code, Path(str(c.label_path))) for c in created]
         except GenotypeNotFoundError as e:

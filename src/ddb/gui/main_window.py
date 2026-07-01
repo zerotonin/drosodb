@@ -5,12 +5,23 @@ from datetime import UTC, datetime, timedelta
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStatusBar, QTabWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QStatusBar,
+    QTabWidget,
+)
+from sqlmodel import Session
 
 from ddb.config import settings
+from ddb.current_user import current_user
+from ddb.db import engine
 from ddb.flybase import RefreshDecision, decide_refresh, paths_for, read_meta
 from ddb.flybase.catalog import read_postpone, write_postpone
 from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
+from ddb.paths import active_profile_name
 
 from .font_scale import (
     FONT_SCALE_DEFAULT,
@@ -68,6 +79,16 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
 
+        # Right-hand persistent widget in the status bar shows who's
+        # acting + which local_paths profile is live. On a shared
+        # tablet every OS user gets their own DDB user auto-created
+        # on first launch, so this is the ground truth for "am I
+        # signed in as the right person".
+        self._identity_lbl = QLabel()
+        self._identity_lbl.setStyleSheet("color: #555; padding: 0 8px;")
+        self.statusBar().addPermanentWidget(self._identity_lbl)
+        self._refresh_identity_label()
+
         # Live font-size shortcuts: Ctrl+= bumps up, Ctrl+- bumps down,
         # Ctrl+0 resets. Ctrl+= doubles as Ctrl++ on most keyboards where
         # + requires Shift; we register both so it works regardless.
@@ -86,6 +107,22 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Live font-size scaling — keyboard + Settings tab share this path
     # ------------------------------------------------------------------
+
+    def _refresh_identity_label(self) -> None:
+        """Populate the right-hand status-bar chip with the current
+        user + active local_paths profile. Called once at startup;
+        cheap enough that we don't bother caching."""
+        try:
+            with Session(engine) as s:
+                u = current_user(s)
+                who = f"{u.username}"
+                if u.full_name:
+                    who += f" ({u.full_name})"
+        except Exception:  # noqa: BLE001 — status bar must never crash startup
+            who = "unknown"
+        self._identity_lbl.setText(
+            f"Signed in as: <b>{who}</b> &nbsp;·&nbsp; profile: <i>{active_profile_name()}</i>"
+        )
 
     def _font_bigger(self) -> None:
         self.set_font_scale(settings.gui_font_scale + FONT_SCALE_STEP)

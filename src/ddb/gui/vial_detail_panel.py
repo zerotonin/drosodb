@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from sqlmodel import Session
 
 from ddb.config import settings
+from ddb.current_user import current_user_id
 from ddb.db import engine
 from ddb.gui.dialogs import ReconnectChoice, check_printer_or_ask
 from ddb.gui.printer_status import shared_monitor
@@ -313,7 +314,9 @@ class DetailPanel(QWidget):
         self.flip_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                created = flip_vial(s, old_print_code=old_code)
+                created = flip_vial(
+                    s, old_print_code=old_code, actor_id=current_user_id(s)
+                )
                 new_vial_id = created.vial.id
                 new_code = created.vial.print_code
                 label_path = Path(str(created.label_path))
@@ -378,6 +381,7 @@ class DetailPanel(QWidget):
                 decommission_vial(
                     s,
                     print_code=code,
+                    actor_id=current_user_id(s),
                     reason=reason.strip() or None,
                 )
         except VialNotFoundError as e:
@@ -445,7 +449,7 @@ class DetailPanel(QWidget):
         self.reactivate_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                reactivate_vial(s, print_code=code)
+                reactivate_vial(s, print_code=code, actor_id=current_user_id(s))
         except VialNotFoundError as e:
             QMessageBox.warning(self, "Reactivate failed", str(e))
             self.reactivate_btn.setEnabled(True)
@@ -502,7 +506,9 @@ class DetailPanel(QWidget):
         self.multiply_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                created = multiply_vial(s, old_print_code=old_code, count=count)
+                created = multiply_vial(
+                    s, old_print_code=old_code, count=count, actor_id=current_user_id(s)
+                )
                 children = [
                     (c.vial.id, c.vial.print_code, Path(str(c.label_path))) for c in created
                 ]

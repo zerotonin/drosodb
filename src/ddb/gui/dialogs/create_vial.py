@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from sqlmodel import Session, select
 
 from ddb.config import settings
+from ddb.current_user import current_user_id
 from ddb.db import engine
 from ddb.gui.dialogs.printer_reconnect import ReconnectChoice, check_printer_or_ask
 from ddb.models import Genotype, OrgUnit, User
@@ -173,8 +174,14 @@ class CreateVialDialog(QDialog):
 
     def _load_choices(self) -> None:
         with Session(engine) as s:
-            default_user = _upsert_default_user(s)
+            # Ensure a stock-keeper + org-unit exist even on a fresh DB
+            # (they're still the fallback owner for shared-scope vials).
+            _upsert_default_user(s)
             default_unit = _upsert_default_org_unit(s)
+            # Preselect the OS user as the owner — the common flow on a
+            # shared tablet is "I am creating a vial for myself". If they
+            # want to hand it to someone else the combo is still there.
+            preselect_owner_id = current_user_id(s)
 
             # Dropped-from-stock genotypes don't appear in New Vial — the
             # user has consciously declared those gone and we shouldn't
@@ -185,7 +192,6 @@ class CreateVialDialog(QDialog):
             users = s.exec(select(User).order_by(User.username)).all()
             units = s.exec(select(OrgUnit).order_by(OrgUnit.name)).all()
 
-            default_user_id = default_user.id
             default_unit_id = default_unit.id
 
         for g in genos:
@@ -194,8 +200,7 @@ class CreateVialDialog(QDialog):
         for u in users:
             label = f"{u.username} — {u.full_name or ''}".strip(" —")
             self.owner_box.addItem(label, userData=u.id)
-        # Preselect the stock keeper (or whatever `default_owner_username` maps to).
-        idx = self.owner_box.findData(default_user_id)
+        idx = self.owner_box.findData(preselect_owner_id)
         if idx >= 0:
             self.owner_box.setCurrentIndex(idx)
 
@@ -347,10 +352,14 @@ class CreateVialDialog(QDialog):
     def _create_one(self, inputs: _Inputs, outcome: _BatchOutcome):
         """Persist one vial + remember the genotype name for the summary."""
         with Session(engine) as s:
+            # The person clicking the button (actor) may differ from the
+            # vial's designated owner (e.g. a student prepping vials for
+            # a colleague). Actor comes from the OS user; owner still
+            # comes off the combobox.
             created = create_vial(
                 s,
                 genotype_id=inputs.genotype_id,
-                actor_id=inputs.owner_id,
+                actor_id=current_user_id(s),
                 owner_id=inputs.owner_id,
                 org_unit_id=inputs.org_unit_id,
                 notes=inputs.notes,
