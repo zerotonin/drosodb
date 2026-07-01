@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/ddb_logo.png" alt="DDB logo" width="180">
+</p>
+
 # DDB — Drosophila Vial Tracking System
 
 [![CI](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml/badge.svg)](https://github.com/zerotonin/drosodb/actions/workflows/ci.yml)
@@ -49,6 +53,24 @@ with one SQLite file — not a multi-user SaaS.
   `ddb vial flip`, `ddb printer status`, etc.).
 
 ## Quickstart
+
+Two paths — pick whichever fits.
+
+**A. Per-user install (no sudo — recommended on shared tablets).** One
+line clones the repo, creates the conda env, installs the package, and
+drops a launcher on your Desktop:
+
+```bash
+curl -sSL \
+  https://raw.githubusercontent.com/zerotonin/drosodb/main/scripts/install_user.sh \
+  | bash
+```
+
+You still need conda installed under your account first; the script
+prints the exact miniforge one-liner if it can't find one. Re-running
+the script updates the env and refreshes the launcher.
+
+**B. Manual install** if you're doing something custom:
 
 ```bash
 # one-time
@@ -162,6 +184,8 @@ via `DDB_<UPPERCASE_NAME>`.
 ## Layout
 
 ```
+assets/
+  ddb_logo.png  app icon (also used by the .desktop launcher, README, docs)
 src/ddb/
   models/       SQLModel ORM (Vial, Genotype, Donor, OrgUnit, User, AuditEvent, …)
   workflows/    transaction-safe mutations with audit (create/flip/decommission,
