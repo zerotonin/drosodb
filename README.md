@@ -5,10 +5,10 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 
-Single-user lab system for tracking *Drosophila* vials with QR-coded labels,
+Small-lab system for tracking *Drosophila* vials with QR-coded labels,
 printer-driven workflow, lineage across flips and crosses, and an auditable
-history. Built for a wet-lab scientist who wants the stock book to stay in
-sync with the freezer — not for a multi-user SaaS.
+history. Runs single-user out of the box and scales to a shared bench tablet
+with one SQLite file — not a multi-user SaaS.
 
 ## What it does
 
@@ -66,8 +66,59 @@ ddb gui
 Run the tests to confirm the install:
 
 ```bash
-pytest     # ~226 tests, ~10 s
+pytest     # ~238 tests, ~10 s
 ```
+
+## Multi-user on one tablet
+
+DDB can run on a shared bench tablet where every biologist has their
+own Linux account. The DB, label PNGs, and everything else live in a
+world-reachable directory (`/srv/ddb/`), the SQLite file uses WAL mode
+so two people can use the GUI at the same time without lock storms,
+and every mutation is audited to the OS user who made it — no login
+prompt, no passwords to manage.
+
+Setup on the tablet (once):
+
+```bash
+# 1. Create the shared directory + `ddb` group and set the perms.
+sudo bash scripts/setup_shared_sqlite.sh
+
+# 2. Add each biologist to the `ddb` group.
+sudo usermod -aG ddb alice
+sudo usermod -aG ddb bob
+# ... they need to log out and back in.
+
+# 3. Point DDB at the shared paths.
+cp local_paths.template.json local_paths.json
+# then edit local_paths.json → "active_profile": "shared_tablet"
+
+# 4. Run the migrations against the shared file.
+DDB_DATABASE_URL=sqlite:////srv/ddb/ddb.sqlite3 alembic upgrade head
+```
+
+From that point on, launching `ddb gui` from any of the tablet accounts
+just works. The bottom-right of the status bar shows `Signed in as:
+<username> · profile: shared_tablet` so nobody wonders whose audit
+trail they're about to write into. First launch for a new username
+auto-creates a DDB `User` row (username = Linux username, full name
+blank — anyone can fill it in from the Settings tab).
+
+Path resolution — everywhere DDB reads the DB URL or data directory,
+the order is:
+
+1. Env var (`DDB_DATABASE_URL`, `DDB_DATA_DIR`) — one-off override.
+2. Active profile in `local_paths.json` — per-machine.
+3. In-repo default (`ddb.sqlite3` next to the checkout, `./data/` for
+   labels) — the single-user case.
+
+`local_paths.json` is gitignored; the committed template
+`local_paths.template.json` documents both the `local` and
+`shared_tablet` profile shapes.
+
+Not (yet) supported: a shared-account mode with per-user passwords.
+The plan when a lab wants that is a Settings toggle that swaps the
+OS-user resolver for a startup login dialog. Filed as a follow-up.
 
 ## Hardware supported
 
@@ -136,7 +187,7 @@ src/ddb/
   qr.py         compact "DDB:<code>" payload + PNG builder
   lineage.py    vial lineage graph + CSV export
   reports.py    search + detail queries
-tests/          ~226 unit + integration tests
+tests/          ~238 unit + integration tests
 alembic/        SQLite migrations
 docs/           design docs + operations walkthrough
 ```
