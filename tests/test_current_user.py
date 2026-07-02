@@ -13,7 +13,17 @@ import pytest
 from sqlmodel import Session, select
 
 from ddb import current_user as cu
+from ddb.config import settings
 from ddb.models import User
+
+
+@pytest.fixture(autouse=True)
+def _reset_override() -> None:
+    """Every test starts with the override cleared. Some set it and
+    forget — this keeps them isolated."""
+    settings.actor_username_override = ""
+    yield
+    settings.actor_username_override = ""
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +96,58 @@ def test_current_user_id_matches_current_user(
 ) -> None:
     monkeypatch.setattr(cu, "_os_username", lambda: "alice")
     assert cu.current_user_id(session) == cu.current_user(session).id
+
+
+def test_override_wins_over_os_username(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user with a preexisting DDB row picks that identity via the
+    override, regardless of what the OS says. This is the Bart case:
+    OS user is `geuba03p`, DDB identity is `bgeurten`."""
+    pre = User(username="bgeurten", full_name="Bart Geurten")
+    session.add(pre)
+    session.commit()
+    session.refresh(pre)
+
+    monkeypatch.setattr(cu, "_os_username", lambda: "geuba03p")
+    settings.actor_username_override = "bgeurten"
+    cu.clear_cache()
+
+    row = cu.current_user(session)
+    assert row.id == pre.id
+    assert row.username == "bgeurten"
+
+
+def test_override_to_unknown_user_raises_not_auto_creates(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of the override is to STOP silent auto-creation.
+    A misconfigured override must surface loudly, not mint a shadow
+    user with the misspelled name."""
+    monkeypatch.setattr(cu, "_os_username", lambda: "geuba03p")
+    settings.actor_username_override = "bgeuten"  # typo
+    cu.clear_cache()
+
+    with pytest.raises(LookupError, match="bgeuten"):
+        cu.current_user(session)
+    # And no row was created.
+    assert (
+        session.exec(select(User).where(User.username == "bgeuten")).first()
+        is None
+    )
+
+
+def test_override_empty_string_falls_back_to_os_user(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty override (the default) is the OS-user path — unchanged
+    behaviour from before the override existed."""
+    monkeypatch.setattr(cu, "_os_username", lambda: "alice")
+    settings.actor_username_override = ""
+    cu.clear_cache()
+
+    row = cu.current_user(session)
+    assert row.username == "alice"
 
 
 def test_cache_survives_across_sessions(

@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     # (e.g. the dark-flies cycle) is one-click. 0 = no last choice.
     last_flip_all_genotype_id: int = 0
 
+    # Override for the OS-user → DDB-user mapping. Empty string / unset
+    # → use getpass.getuser() (the shared-tablet default). Set to an
+    # existing DDB username to alias — Bart's OS account is `geuba03p`
+    # but his historical DDB identity is `bgeurten`, so he sets this to
+    # `bgeurten` on his workstation and every workflow attributes to
+    # the existing row instead of auto-creating a shadow. Configurable
+    # from the Settings tab → Identity group and persisted via .env.
+    actor_username_override: str = ""
+
     # Which camera role the Scan tab starts on. Users can still switch
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"
