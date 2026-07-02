@@ -13,6 +13,7 @@ the system rather than *about* a particular vial / genotype.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -36,6 +37,8 @@ from PySide6.QtWidgets import (
 from sqlmodel import Session, select
 
 from ddb.config import settings
+from ddb.current_user import _os_username
+from ddb.current_user import clear_cache as clear_user_cache
 from ddb.db import engine
 from ddb.flybase.catalog import paths_for, read_meta
 from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
@@ -79,11 +82,13 @@ class SettingsTab(QWidget):
     default_camera_changed = Signal(str)
     catalog_enabled_changed = Signal(bool)
     font_scale_changed = Signal(float)
+    identity_changed = Signal()  # fires after actor_username_override changes
 
     def __init__(self) -> None:
         super().__init__()
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self._build_identity_group())
         layout.addWidget(self._build_font_group())
         layout.addWidget(self._build_debug_group())
         layout.addWidget(self._build_printer_group())
@@ -406,6 +411,95 @@ class SettingsTab(QWidget):
         self.default_camera_changed.emit(role)
 
     # ------------------------------------------------------------------
+    # Identity — OS-user → DDB-user alias for this workstation
+    # ------------------------------------------------------------------
+
+    def _build_identity_group(self) -> QGroupBox:
+        """Pick which DDB `User` row the current OS user should act as.
+
+        The 'Auto' entry means the OS-user path (getpass.getuser());
+        every other entry is an explicit alias saved to
+        DDB_ACTOR_USERNAME_OVERRIDE in .env. Change is live — the
+        `current_user` cache is cleared and MainWindow re-reads the
+        identity chip immediately."""
+        box = QGroupBox("Identity")
+
+        os_user = _os_username()
+        self.identity_box = QComboBox()
+        self.identity_box.addItem(f"Auto — use OS username ({os_user})", userData="")
+
+        with Session(engine) as s:
+            rows = s.exec(select(User).order_by(User.username)).all()
+            for u in rows:
+                label = u.username
+                if u.full_name:
+                    label += f" — {u.full_name}"
+                self.identity_box.addItem(label, userData=u.username)
+
+        # Preselect whatever's currently active.
+        current = (settings.actor_username_override or "").strip()
+        idx = self.identity_box.findData(current)
+        if idx >= 0:
+            self.identity_box.setCurrentIndex(idx)
+
+        save_btn = QPushButton("Set identity")
+        save_btn.clicked.connect(self._save_identity)
+
+        tip = QLabel(
+            "<i>Every workflow attributes to this row (New Vial, Flip, "
+            "Multiply, …). Pick <b>Auto</b> on a personal machine — the "
+            "app auto-creates a User row named after your Linux login. "
+            "Pick a specific DDB user if your OS username differs from "
+            "your historical DDB identity (e.g. <code>bgeurten</code> "
+            "on the <code>geuba03p</code> account). Persists to .env.</i>"
+        )
+        tip.setStyleSheet("color: #666;")
+        tip.setWordWrap(True)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Act as:"))
+        row.addWidget(self.identity_box, 1)
+        row.addWidget(save_btn)
+
+        lo = QVBoxLayout(box)
+        lo.addLayout(row)
+        lo.addWidget(tip)
+        return box
+
+    def _save_identity(self) -> None:
+        """Persist DDB_ACTOR_USERNAME_OVERRIDE and fire identity_changed
+        so MainWindow refreshes its chip. Rolls back the in-memory
+        setting if the picked username doesn't resolve to an existing
+        User row — matches current_user's stricter override semantics."""
+        picked = str(self.identity_box.currentData() or "")
+        previous = (settings.actor_username_override or "").strip()
+
+        settings.actor_username_override = picked
+        clear_user_cache()
+
+        # Verify: pretend to resolve. If it errors, roll back and warn.
+        if picked:
+            with Session(engine) as s:
+                row = s.exec(select(User).where(User.username == picked)).first()
+            if row is None:
+                settings.actor_username_override = previous
+                clear_user_cache()
+                QMessageBox.warning(
+                    self,
+                    "Identity not found",
+                    f"No DDB user named <b>{picked}</b>. Kept previous "
+                    "identity. Add the user first in the 'User' group "
+                    "below, then try again.",
+                )
+                return
+
+        with contextlib.suppress(OSError):
+            _upsert_env_var(
+                _env_path(), "DDB_ACTOR_USERNAME_OVERRIDE", picked
+            )
+        self.identity_changed.emit()
+
+    # ------------------------------------------------------------------
     # Font size — slider + spinbox; persists to .env; live retune
     # ------------------------------------------------------------------
 
@@ -594,6 +688,32 @@ class SettingsTab(QWidget):
         QMessageBox.information(self, "User added", f"Added user {username!r}.")
         for e in (self.user_username_edit, self.user_fullname_edit, self.user_email_edit):
             e.clear()
+        # Refresh the Identity picker so the new row is immediately
+        # selectable — no restart needed.
+        self._reload_identity_choices()
+
+    def _reload_identity_choices(self) -> None:
+        """Rebuild the identity combobox after a new user is added.
+        Preserves the current selection so the active alias survives."""
+        current = self.identity_box.currentData()
+        self.identity_box.blockSignals(True)
+        try:
+            self.identity_box.clear()
+            os_user = _os_username()
+            self.identity_box.addItem(
+                f"Auto — use OS username ({os_user})", userData=""
+            )
+            with Session(engine) as s:
+                for u in s.exec(select(User).order_by(User.username)).all():
+                    label = u.username
+                    if u.full_name:
+                        label += f" — {u.full_name}"
+                    self.identity_box.addItem(label, userData=u.username)
+            idx = self.identity_box.findData(current)
+            if idx >= 0:
+                self.identity_box.setCurrentIndex(idx)
+        finally:
+            self.identity_box.blockSignals(False)
 
     def _build_unit_group(self) -> QGroupBox:
         box = QGroupBox("Add org unit")

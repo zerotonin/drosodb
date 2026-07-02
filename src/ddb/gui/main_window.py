@@ -100,6 +100,10 @@ class MainWindow(QMainWindow):
         # Settings-tab slider → live retune.
         self.settings_tab.font_scale_changed.connect(self.set_font_scale)
 
+        # Identity change (Settings → Identity → Set) rebuilds the
+        # status-bar chip so the current actor is always visible.
+        self.settings_tab.identity_changed.connect(self._refresh_identity_label)
+
         # Deferred: ask about catalog refresh after the window is on
         # screen so the user sees DDB first, not a surprise dialog.
         QTimer.singleShot(500, self._check_catalog_refresh)
