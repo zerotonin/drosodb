@@ -45,14 +45,10 @@ def _seed(session: Session) -> tuple[User, Genotype, Genotype]:
 
 def test_flips_every_active_vial_and_produces_labels(session: Session) -> None:
     user, dark, _ = _seed(session)
-    parents = [
-        create_vial(session, genotype_id=dark.id, actor_id=user.id).vial for _ in range(3)
-    ]
+    parents = [create_vial(session, genotype_id=dark.id, actor_id=user.id).vial for _ in range(3)]
     parent_codes = [p.print_code for p in parents]
 
-    results = flip_active_vials_for_genotype(
-        session, genotype_id=dark.id, actor_id=user.id
-    )
+    results = flip_active_vials_for_genotype(session, genotype_id=dark.id, actor_id=user.id)
 
     assert len(results) == 3
     assert all(r.label_path.exists() for r in results)
@@ -115,13 +111,9 @@ def test_unknown_genotype_raises(session: Session) -> None:
 
 def test_audit_trail_has_batch_marker_and_pairs(session: Session) -> None:
     user, dark, _ = _seed(session)
-    parents = [
-        create_vial(session, genotype_id=dark.id, actor_id=user.id).vial for _ in range(2)
-    ]
+    parents = [create_vial(session, genotype_id=dark.id, actor_id=user.id).vial for _ in range(2)]
 
-    results = flip_active_vials_for_genotype(
-        session, genotype_id=dark.id, actor_id=user.id
-    )
+    results = flip_active_vials_for_genotype(session, genotype_id=dark.id, actor_id=user.id)
 
     parent_by_id = {p.id: p for p in parents}
     for r in results:

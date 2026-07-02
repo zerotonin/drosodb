@@ -130,9 +130,7 @@ class FlipGenotypeDialog(QDialog):
             )
             rows = list(
                 s.exec(
-                    select(Genotype)
-                    .where(Genotype.is_in_stock.is_(True))
-                    .order_by(Genotype.name)
+                    select(Genotype).where(Genotype.is_in_stock.is_(True)).order_by(Genotype.name)
                 ).all()
             )
 
@@ -243,9 +241,7 @@ class FlipGenotypeDialog(QDialog):
         self.accept()
 
 
-def _batch_print(
-    children: list[tuple[str, Path]], do_print: bool
-) -> tuple[int, int, str | None]:
+def _batch_print(children: list[tuple[str, Path]], do_print: bool) -> tuple[int, int, str | None]:
     """Print each label PNG sequentially with the Brother-friendly
     settle delay between jobs. Returns (printed, failed, first_error).
     Lifted out of the dialog so the OK path stays readable."""

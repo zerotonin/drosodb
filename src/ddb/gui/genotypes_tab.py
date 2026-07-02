@@ -406,14 +406,9 @@ class GenotypesTab(QWidget):
                 f"<b>{r.genotype_name}</b> has no active vials right now.",
             )
         else:
-            summary = (
-                f"Flipped <b>{n}</b> vial{'s' if n != 1 else ''} of "
-                f"<b>{r.genotype_name}</b>."
-            )
+            summary = f"Flipped <b>{n}</b> vial{'s' if n != 1 else ''} of <b>{r.genotype_name}</b>."
             if r.printed_count or r.failed_count:
-                summary += (
-                    f"<br><br>Printed: <b>{r.printed_count}</b> / {n}"
-                )
+                summary += f"<br><br>Printed: <b>{r.printed_count}</b> / {n}"
                 if r.failed_count:
                     summary += f" — <b>{r.failed_count}</b> failed"
             QMessageBox.information(self, "Flip all — done", summary)

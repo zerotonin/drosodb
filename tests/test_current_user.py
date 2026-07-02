@@ -33,9 +33,7 @@ def _clear_cache() -> None:
     cu.clear_cache()
 
 
-def test_auto_creates_user_on_first_call(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_auto_creates_user_on_first_call(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cu, "_os_username", lambda: "alice")
     row = cu.current_user(session)
     assert row.id is not None
@@ -50,9 +48,7 @@ def test_auto_creates_user_on_first_call(
     assert len(all_rows) == 1
 
 
-def test_reuses_existing_user_row(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reuses_existing_user_row(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     pre = User(username="bart", full_name="Bart Geurten")
     session.add(pre)
     session.commit()
@@ -98,9 +94,7 @@ def test_current_user_id_matches_current_user(
     assert cu.current_user_id(session) == cu.current_user(session).id
 
 
-def test_override_wins_over_os_username(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_override_wins_over_os_username(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     """A user with a preexisting DDB row picks that identity via the
     override, regardless of what the OS says. This is the Bart case:
     OS user is `geuba03p`, DDB identity is `bgeurten`."""
@@ -131,10 +125,7 @@ def test_override_to_unknown_user_raises_not_auto_creates(
     with pytest.raises(LookupError, match="bgeuten"):
         cu.current_user(session)
     # And no row was created.
-    assert (
-        session.exec(select(User).where(User.username == "bgeuten")).first()
-        is None
-    )
+    assert session.exec(select(User).where(User.username == "bgeuten")).first() is None
 
 
 def test_override_empty_string_falls_back_to_os_user(
@@ -160,9 +151,7 @@ def test_cache_survives_across_sessions(
 
     import ddb.models  # noqa: F401
 
-    engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
 
     monkeypatch.setattr(cu, "_os_username", lambda: "alice")

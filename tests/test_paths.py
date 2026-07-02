@@ -54,9 +54,7 @@ def test_active_profile_wins_over_fallback(local_paths_file: Path) -> None:
     assert paths.active_profile_name() == "shared_tablet"
 
 
-def test_env_var_wins_over_profile(
-    local_paths_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_env_var_wins_over_profile(local_paths_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(
         local_paths_file,
         {
@@ -95,9 +93,7 @@ def test_missing_active_profile_falls_back(local_paths_file: Path) -> None:
         local_paths_file,
         {
             "active_profile": "does-not-exist",
-            "profiles": {
-                "shared_tablet": {"database_url": "sqlite:///s.db", "data_root": "/s"}
-            },
+            "profiles": {"shared_tablet": {"database_url": "sqlite:///s.db", "data_root": "/s"}},
         },
     )
     assert paths.resolve_database_url("sqlite:///fallback.db") == "sqlite:///fallback.db"
