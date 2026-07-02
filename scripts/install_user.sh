@@ -109,35 +109,137 @@ fi
 # shellcheck disable=SC1090
 source "$CONDA_SH"
 
-# The classic solver takes 5–15 minutes on this environment.yml
-# (20+ packages, conda-forge). libmamba is bundled with conda 24.x+
-# and finishes the same solve in ~30 seconds. Prefer it whenever
-# available; fall back silently if the flag isn't recognised (older
-# conda), so the script still runs — just slowly.
-SOLVER_FLAG=""
-if conda env create --help 2>&1 | grep -q -- "--solver"; then
-    SOLVER_FLAG="--solver=libmamba"
-    log "using libmamba solver (much faster on multi-package envs)"
-else
-    warn "your conda is pre-24.x — env create will use the slow classic"
-    warn "solver. Speed it up permanently with:"
-    warn "    conda install -n base -c conda-forge conda-libmamba-solver -y"
-    warn "    conda config --set solver libmamba"
-fi
+# 3a) Prefer an env pack when available — sidesteps the whole conda
+# download entirely. On this shared-tablet the campus link (or a
+# per-IP throttle at conda.anaconda.org) chokes when two users pull
+# from conda-forge simultaneously; running install_user.sh for user
+# #2 while user #1 is still fetching drops both streams to
+# ~100 KB/s. An env pack is a ~200 MB tarball built once
+# (scripts/pack_env.sh) and untarred per user in seconds.
+#
+# Lookup order:
+#   1. $DDB_ENV_PACK              — explicit override
+#   2. /srv/ddb/env-packs/<file>  — shared, created by setup script
+#   3. ~/ddb-env.tar.gz           — per-user fallback
+find_env_pack() {
+    if [[ -n "${DDB_ENV_PACK:-}" && -f "$DDB_ENV_PACK" ]]; then
+        echo "$DDB_ENV_PACK"; return 0
+    fi
+    local shared="/srv/ddb/env-packs/ddb-env.tar.gz"
+    [[ -f "$shared" ]] && { echo "$shared"; return 0; }
+    local home_pack="$HOME/ddb-env.tar.gz"
+    [[ -f "$home_pack" ]] && { echo "$home_pack"; return 0; }
+    return 1
+}
 
-if conda env list | awk '{print $1}' | grep -qxF "$CONDA_ENV"; then
-    log "conda env '$CONDA_ENV' exists — updating (prune orphans)"
-    # shellcheck disable=SC2086  # SOLVER_FLAG is either empty or one token
-    conda env update -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" \
-        --prune $SOLVER_FLAG
+install_from_pack() {
+    local pack="$1"
+    local envs_dir target
+    envs_dir="$(conda info --base 2>/dev/null)/envs"
+    target="$envs_dir/$CONDA_ENV"
+
+    if [[ -d "$target" ]]; then
+        log "env '$CONDA_ENV' already exists — skipping pack install"
+        log "(delete $target and re-run to force a fresh unpack)"
+        return 0
+    fi
+
+    log "installing env from pack: $pack"
+    log "(untar + conda-unpack — no network downloads)"
+    mkdir -p "$target"
+    tar -xzf "$pack" -C "$target"
+
+    # conda-unpack rewrites absolute paths baked into shebang lines and
+    # activate scripts so the env works from its new prefix.
+    if [[ -x "$target/bin/conda-unpack" ]]; then
+        "$target/bin/conda-unpack"
+    else
+        warn "$target/bin/conda-unpack missing — pack was not built with"
+        warn "conda-pack. Env may work anyway, but paths might be stale."
+    fi
+}
+
+ENV_TOOL="conda"
+SOLVER_FLAG=""
+
+if PACK="$(find_env_pack)"; then
+    install_from_pack "$PACK"
 else
-    log "creating conda env '$CONDA_ENV' from environment.yml"
-    log "(if this pauses on 'Collecting package metadata' for more than"
-    log " ~60s, hit Ctrl+C and re-run — libmamba occasionally needs a"
-    log " warm cache)"
-    # shellcheck disable=SC2086
-    conda env create -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" \
-        $SOLVER_FLAG
+    # 3b) No pack — fall through to a real conda / mamba install.
+    #
+    # There are two independent slow stages:
+    #
+    #   1. "Collecting package metadata"  — download + parse the channel
+    #      indexes (conda-forge/linux-64 is ~200 MB). Classic conda does
+    #      this serially with ijson; on a shared campus network this is
+    #      the 5-15 minute stage. libmamba's `--solver` flag doesn't
+    #      touch this stage — it only helps the SOLVE. To speed the
+    #      metadata step up we need `mamba` itself (parallel HTTP + fast
+    #      parser) or the modern conda repodata caching.
+    #
+    #   2. "Solving environment"          — solve dependency graph. This
+    #      is where `--solver=libmamba` cuts minutes to seconds.
+    #
+    # Preferred tool: mamba (installs its own libmamba, fixes both
+    # stages). Second-best: modern conda + --solver=libmamba (fixes
+    # stage 2 only). Last resort: classic conda with a big fat warning.
+
+    if command -v mamba > /dev/null 2>&1; then
+        ENV_TOOL="mamba"
+        log "using mamba — fast metadata fetch + libmamba solver in one tool"
+    elif conda env create --help 2>&1 | grep -q -- "--solver"; then
+        SOLVER_FLAG="--solver=libmamba"
+        log "using conda + libmamba solver (env create will be fast once"
+        log "the channel metadata is cached; the FIRST fetch is still slow"
+        log "because classic conda does the download serially — if you see"
+        log "'Collecting package metadata' hang >60s, install mamba:"
+        log "    conda install -n base -c conda-forge mamba -y"
+    else
+        warn "your conda is pre-24.x and mamba isn't installed. Env creation"
+        warn "will use the classic solver + serial metadata fetch — this can"
+        warn "take 10-20 minutes on a fresh install. Speed it up permanently:"
+        warn "    conda install -n base -c conda-forge mamba -y"
+        warn "…then re-run this script."
+    fi
+
+    # Wipe the channel-index cache if it looks half-downloaded — a killed
+    # previous run leaves partial repodata that conda re-fetches from
+    # scratch every time. Silent-fail if the command isn't there.
+    if [[ "${DDB_CLEAN_INDEX_CACHE:-1}" == "1" ]]; then
+        log "clearing conda index cache (avoids retry loops on partial downloads)"
+        conda clean --index-cache -y > /dev/null 2>&1 || true
+    fi
+
+    if conda env list | awk '{print $1}' | grep -qxF "$CONDA_ENV"; then
+        # Default policy: env exists, DO NOT touch it. Re-runs of this
+        # script are the common case (users regenerating the launcher,
+        # picking up a new pyproject entry, retrying after a hiccup);
+        # they should not silently trigger a fresh conda-forge round
+        # trip. Set DDB_UPDATE_ENV=1 to force the update when
+        # environment.yml has genuinely changed.
+        if [[ "${DDB_UPDATE_ENV:-0}" == "1" ]]; then
+            log "DDB_UPDATE_ENV=1 → updating existing env (prune orphans)"
+            # shellcheck disable=SC2086  # SOLVER_FLAG is empty or one token
+            "$ENV_TOOL" env update -n "$CONDA_ENV" \
+                -f "$INSTALL_DIR/environment.yml" --prune $SOLVER_FLAG
+        else
+            log "conda env '$CONDA_ENV' exists — skipping env update"
+            log "(re-run with DDB_UPDATE_ENV=1 when environment.yml changes)"
+        fi
+    else
+        warn "no env pack found at /srv/ddb/env-packs/ or \$DDB_ENV_PACK —"
+        warn "this will download 100-200 MB from conda-forge. If another"
+        warn "tablet user is currently installing, wait for them to finish"
+        warn "OR ask someone with a working env to run scripts/pack_env.sh"
+        warn "so future installs pull from a local tarball instead."
+        log "creating conda env '$CONDA_ENV' from environment.yml"
+        log "(first-time metadata download is 100-200 MB; if progress stalls"
+        log " for >60s, Ctrl+C and check: curl -sI https://conda.anaconda.org/"
+        log " conda-forge/noarch/repodata.json.zst)"
+        # shellcheck disable=SC2086
+        "$ENV_TOOL" env create -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" \
+            $SOLVER_FLAG
+    fi
 fi
 
 conda activate "$CONDA_ENV"

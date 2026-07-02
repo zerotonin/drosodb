@@ -142,6 +142,30 @@ Not (yet) supported: a shared-account mode with per-user passwords.
 The plan when a lab wants that is a Settings toggle that swaps the
 OS-user resolver for a startup login dialog. Filed as a follow-up.
 
+### Offline env pack (fast tablet onboarding)
+
+conda-forge downloads through the campus link comfortably handle one
+install at a time — a second tablet user starting `install_user.sh`
+while user #1 is still pulling packages drops both streams to
+~100 KB/s. To skip the conda download entirely on user #2 and beyond,
+snapshot a working env once and let subsequent installs untar it:
+
+```bash
+# One-time, from any account that has a working `ddb` conda env:
+bash scripts/pack_env.sh
+# → produces /srv/ddb/env-packs/ddb-env.tar.gz  (~200 MB)
+```
+
+From that point on, `install_user.sh` looks for a pack in this order:
+1. `$DDB_ENV_PACK` env-var override.
+2. `/srv/ddb/env-packs/ddb-env.tar.gz` (created by the setup script).
+3. `~/ddb-env.tar.gz` (per-user fallback if you copied one by hand).
+4. Fresh conda/mamba install from the network (previous behaviour).
+
+When a pack is found the env is untarred + `conda-unpack`-ed in seconds
+— no channel indexes, no package downloads. Ship a new pack whenever
+`environment.yml` changes.
+
 ## Hardware supported
 
 | Device       | Model               | Transport                | Notes                                  |

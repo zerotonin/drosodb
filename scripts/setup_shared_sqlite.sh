@@ -47,6 +47,14 @@ else
     echo "$SHARED_DIR already exists — re-applying group + perms"
 fi
 
+# Shared conda-env-pack drop zone. install_user.sh looks here first
+# and skips the multi-hundred-MB conda download when a pack is present,
+# so tablet #2 and beyond install in seconds. See scripts/pack_env.sh.
+if [[ ! -d "$SHARED_DIR/env-packs" ]]; then
+    install -d -o root -g "$GROUP" -m 2775 "$SHARED_DIR/env-packs"
+    echo "created $SHARED_DIR/env-packs (conda-pack drop zone)"
+fi
+
 # ─── 3) Re-assert perms every run (setgid + group-writable) ─────────
 chgrp -R "$GROUP" "$SHARED_DIR"
 chmod g+rwX,o-rwx "$SHARED_DIR"
