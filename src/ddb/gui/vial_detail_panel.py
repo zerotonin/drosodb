@@ -9,17 +9,22 @@ buttons for whichever vial is currently loaded.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTextEdit,
@@ -67,6 +72,11 @@ class DetailPanel(QWidget):
         super().__init__()
         self._current_vial_id: int | None = None
         self._current_print_code: str | None = None
+        # Full VialDetail of whatever is currently shown, so the
+        # Flip/Multiply confirmation dialogs can spell out the inherited
+        # attribution (genotype/owner/org unit) instead of just saying
+        # "the same as this vial" without saying what "the same" is.
+        self._current_detail: VialDetail | None = None
 
         self.header = QLabel("<i>No vial scanned yet.</i>")
         self.header.setTextFormat(Qt.TextFormat.RichText)
@@ -194,6 +204,7 @@ class DetailPanel(QWidget):
 
         self._current_vial_id = r.vial_id
         self._current_print_code = r.print_code
+        self._current_detail = detail
         self.export_lineage_btn.setEnabled(True)
         self.flip_btn.setEnabled(r.is_active)
         self.decommission_btn.setEnabled(r.is_active)
@@ -224,8 +235,35 @@ class DetailPanel(QWidget):
         self.audit.clear()
         self._current_vial_id = None
         self._current_print_code = None
+        self._current_detail = None
         for b in self._all_btns:
             b.setEnabled(False)
+
+    def _inherited_block_html(self) -> str:
+        """Render the "this successor will inherit" summary used inside
+        the Flip / Multiply confirmation dialogs.
+
+        Uses the same VialDetail we already loaded for the panel so the
+        values match what the user is looking at. Explicit dashes for
+        anything missing make attribution problems visible at the
+        moment they matter (i.e. before the click commits the batch),
+        rather than silently carrying nulls forward."""
+        d = self._current_detail
+        if d is None:
+            return ""
+        r = d.row
+        owner = r.owner_username or "-"
+        if r.owner_full_name:
+            owner += f" — {r.owner_full_name}"
+        unit = r.org_unit_name or "-"
+        genotype = r.genotype_name or "-"
+        return (
+            "<table cellpadding='2' style='margin-top:6px'>"
+            f"<tr><td><b>Genotype:</b></td><td>{genotype}</td></tr>"
+            f"<tr><td><b>Owner:</b></td><td>{owner}</td></tr>"
+            f"<tr><td><b>Org unit:</b></td><td>{unit}</td></tr>"
+            "</table>"
+        )
 
     def _print_label(self) -> None:
         if self._current_print_code is None:
@@ -292,17 +330,35 @@ class DetailPanel(QWidget):
             return
         old_code = self._current_print_code
 
-        confirm = QMessageBox.question(
-            self,
-            "Flip vial?",
-            f"Flip {old_code}?\n\n"
-            "This decommissions the current vial and creates a successor "
-            "with the same genotype, owner, and org unit.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+        if not settings.suppress_flip_confirm:
+            # HTML message so the inheritance block renders as a table.
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setWindowTitle("Flip vial?")
+            msg.setTextFormat(Qt.TextFormat.RichText)
+            msg.setText(
+                f"<b>Flip {old_code}?</b><br><br>"
+                "This decommissions the current vial and creates a "
+                "successor that inherits:"
+                f"{self._inherited_block_html()}"
+            )
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+            skip_chk = QCheckBox("Don't show me this message again")
+            skip_chk.setToolTip(
+                "Skip this confirmation for future flips. Undo in "
+                "Settings if you want the dialog back."
+            )
+            msg.setCheckBox(skip_chk)
+            if msg.exec() != QMessageBox.StandardButton.Yes:
+                return
+            if skip_chk.isChecked():
+                settings.suppress_flip_confirm = True
+                with contextlib.suppress(OSError, ImportError):
+                    from ddb.gui.settings_tab import _env_path, _upsert_env_var
+                    _upsert_env_var(_env_path(), "DDB_SUPPRESS_FLIP_CONFIRM", "1")
 
         do_print = settings.printer_enabled and settings.printer_auto_print
         if do_print:
@@ -367,13 +423,20 @@ class DetailPanel(QWidget):
         code = self._current_print_code
         vial_id = self._current_vial_id
 
-        reason, ok = QInputDialog.getText(
-            self,
-            "Decommission vial",
-            f"Decommission {code}?\n\nOptional reason (e.g. 'contaminated'):",
-        )
-        if not ok:
-            return
+        if settings.suppress_decommission_confirm:
+            reason: str | None = None
+        else:
+            dlg = _DecommissionDialog(code, self._inherited_block_html(), self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            reason = dlg.reason() or None
+            if dlg.suppress_future():
+                settings.suppress_decommission_confirm = True
+                with contextlib.suppress(OSError, ImportError):
+                    from ddb.gui.settings_tab import _env_path, _upsert_env_var
+                    _upsert_env_var(
+                        _env_path(), "DDB_SUPPRESS_DECOMMISSION_CONFIRM", "1"
+                    )
 
         self.decommission_btn.setEnabled(False)
         try:
@@ -571,3 +634,61 @@ class DetailPanel(QWidget):
                 "Vials are in the database; you can re-print individual "
                 "labels from the Scan tab's detail panel.",
             )
+
+
+class _DecommissionDialog(QDialog):
+    """Confirm-decommission dialog that combines the yes/no + optional
+    reason + 'don't ask again' checkbox in a single OK click.
+
+    Motivated by Bart's bulk-cleanup flow: the reason field is helpful
+    when you have one (`contaminated`, `wrong genotype`) but most
+    decomms are just "done with this vial", and the extra dialog on
+    every click is friction. The checkbox opts out of the whole flow;
+    Settings has the undo toggle."""
+
+    def __init__(self, print_code: str, inheritance_html: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Decommission vial")
+        self.setMinimumWidth(420)
+
+        header = QLabel(
+            f"<b>Decommission {print_code}?</b><br>"
+            "This marks the vial end-of-life. No successor is created; "
+            "history and audit trail are preserved."
+        )
+        header.setTextFormat(Qt.TextFormat.RichText)
+        header.setWordWrap(True)
+
+        inherit_lbl = QLabel(inheritance_html)
+        inherit_lbl.setTextFormat(Qt.TextFormat.RichText)
+
+        self._reason_edit = QLineEdit()
+        self._reason_edit.setPlaceholderText("Optional — e.g. 'contaminated'")
+
+        self._skip_chk = QCheckBox("Don't show me this message again")
+        self._skip_chk.setToolTip(
+            "Skip this dialog for future decommissions. The reason "
+            "field is dropped too. Undo in Settings."
+        )
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        form = QFormLayout()
+        form.addRow("Reason:", self._reason_edit)
+
+        lo = QVBoxLayout(self)
+        lo.addWidget(header)
+        lo.addWidget(inherit_lbl)
+        lo.addLayout(form)
+        lo.addWidget(self._skip_chk)
+        lo.addWidget(buttons)
+
+    def reason(self) -> str:
+        return self._reason_edit.text().strip()
+
+    def suppress_future(self) -> bool:
+        return self._skip_chk.isChecked()
