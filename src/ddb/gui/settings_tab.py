@@ -495,9 +495,7 @@ class SettingsTab(QWidget):
                 return
 
         with contextlib.suppress(OSError):
-            _upsert_env_var(
-                _env_path(), "DDB_ACTOR_USERNAME_OVERRIDE", picked
-            )
+            _upsert_env_var(_env_path(), "DDB_ACTOR_USERNAME_OVERRIDE", picked)
         self.identity_changed.emit()
 
     # ------------------------------------------------------------------
@@ -618,9 +616,7 @@ class SettingsTab(QWidget):
         lo.addWidget(tip)
         return box
 
-    def _on_confirm_toggled(
-        self, settings_attr: str, env_key: str, suppress: bool
-    ) -> None:
+    def _on_confirm_toggled(self, settings_attr: str, env_key: str, suppress: bool) -> None:
         setattr(settings, settings_attr, suppress)
         with contextlib.suppress(OSError):
             _upsert_env_var(_env_path(), env_key, "1" if suppress else "0")
@@ -751,9 +747,7 @@ class SettingsTab(QWidget):
         try:
             self.identity_box.clear()
             os_user = _os_username()
-            self.identity_box.addItem(
-                f"Auto — use OS username ({os_user})", userData=""
-            )
+            self.identity_box.addItem(f"Auto — use OS username ({os_user})", userData="")
             with Session(engine) as s:
                 for u in s.exec(select(User).order_by(User.username)).all():
                     label = u.username

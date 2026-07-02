@@ -342,9 +342,7 @@ class DetailPanel(QWidget):
                 "successor that inherits:"
                 f"{self._inherited_block_html()}"
             )
-            msg.setStandardButtons(
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             msg.setDefaultButton(QMessageBox.StandardButton.Yes)
             skip_chk = QCheckBox("Don't show me this message again")
             skip_chk.setToolTip(
@@ -358,6 +356,7 @@ class DetailPanel(QWidget):
                 settings.suppress_flip_confirm = True
                 with contextlib.suppress(OSError, ImportError):
                     from ddb.gui.settings_tab import _env_path, _upsert_env_var
+
                     _upsert_env_var(_env_path(), "DDB_SUPPRESS_FLIP_CONFIRM", "1")
 
         do_print = settings.printer_enabled and settings.printer_auto_print
@@ -370,9 +369,7 @@ class DetailPanel(QWidget):
         self.flip_btn.setEnabled(False)
         try:
             with Session(engine) as s:
-                created = flip_vial(
-                    s, old_print_code=old_code, actor_id=current_user_id(s)
-                )
+                created = flip_vial(s, old_print_code=old_code, actor_id=current_user_id(s))
                 new_vial_id = created.vial.id
                 new_code = created.vial.print_code
                 label_path = Path(str(created.label_path))
@@ -434,9 +431,8 @@ class DetailPanel(QWidget):
                 settings.suppress_decommission_confirm = True
                 with contextlib.suppress(OSError, ImportError):
                     from ddb.gui.settings_tab import _env_path, _upsert_env_var
-                    _upsert_env_var(
-                        _env_path(), "DDB_SUPPRESS_DECOMMISSION_CONFIRM", "1"
-                    )
+
+                    _upsert_env_var(_env_path(), "DDB_SUPPRESS_DECOMMISSION_CONFIRM", "1")
 
         self.decommission_btn.setEnabled(False)
         try:
