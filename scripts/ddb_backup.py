@@ -65,8 +65,14 @@ def snapshot(src: Path, dest_dir: Path) -> Path:
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     target = history / f"ddb_{ts}.sqlite3"
 
-    with sqlite3.connect(str(src)) as source, sqlite3.connect(str(target)) as dst:
-        source.backup(dst)
+    try:
+        with sqlite3.connect(str(src)) as source, sqlite3.connect(str(target)) as dst:
+            source.backup(dst)
+    except Exception:
+        # sqlite3.connect(target) already created an empty file; don't
+        # leave a 0-byte snapshot behind for prune to keep around.
+        target.unlink(missing_ok=True)
+        raise
 
     latest = dest_dir / "ddb.latest.sqlite3"
     shutil.copy2(target, latest)

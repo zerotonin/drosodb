@@ -14,5 +14,9 @@ IOSchedulingClass=idle
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/srv/ddb/backups
+# /srv/ddb is the source-DB directory. It must be writable even for
+# a read-only backup because WAL-mode SQLite touches -wal/-shm files
+# alongside the DB when the writer (the GUI) is active. This still
+# implicitly covers /srv/ddb/backups (the snapshot destination).
+ReadWritePaths=/srv/ddb
 NoNewPrivileges=true
