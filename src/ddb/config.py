@@ -102,6 +102,18 @@ class Settings(BaseSettings):
     # from the Settings tab → Identity group and persisted via .env.
     actor_username_override: str = ""
 
+    # Skip the Flip confirmation dialog on the vial-detail panel. The
+    # dialog is helpful the first hundred times ("did the successor
+    # inherit the right owner/unit?") and friction the next thousand.
+    # Toggled by the "Don't show me this message again" checkbox on
+    # the dialog itself — persisted via .env, undo in Settings.
+    suppress_flip_confirm: bool = False
+
+    # Same idea for decommission. When suppressed, the reason field is
+    # skipped too (there's no natural place to prompt without a dialog),
+    # so this is opt-in for "I'm doing bulk cleanup, don't ask me."
+    suppress_decommission_confirm: bool = False
+
     # Which camera role the Scan tab starts on. Users can still switch
     # per-session via the combo; this is just the first-run default.
     default_camera_role: str = "back"

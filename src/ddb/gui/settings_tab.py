@@ -90,6 +90,7 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_identity_group())
         layout.addWidget(self._build_font_group())
+        layout.addWidget(self._build_confirmations_group())
         layout.addWidget(self._build_debug_group())
         layout.addWidget(self._build_printer_group())
         layout.addWidget(self._build_catalog_group())
@@ -573,6 +574,56 @@ class SettingsTab(QWidget):
     def persist_font_scale(self, scale: float) -> None:
         """Write the scale back to .env so it survives restart."""
         _upsert_env_var(_env_path(), "DDB_GUI_FONT_SCALE", f"{clamp_font_scale(scale):.2f}")
+
+    # ------------------------------------------------------------------
+    # Confirmation dialogs — undo "don't show me this again" clicks
+    # ------------------------------------------------------------------
+
+    def _build_confirmations_group(self) -> QGroupBox:
+        """Undo the "don't ask me again" checkboxes that live on the
+        Flip / Decommission confirmation dialogs. Both are one-way toggles
+        set from the dialog itself; this is the only place to turn them
+        back on without editing .env by hand."""
+        box = QGroupBox("Confirmations")
+
+        self.ask_flip_chk = QCheckBox("Ask before flipping a vial")
+        self.ask_flip_chk.setChecked(not settings.suppress_flip_confirm)
+        self.ask_flip_chk.toggled.connect(
+            lambda checked: self._on_confirm_toggled(
+                "suppress_flip_confirm", "DDB_SUPPRESS_FLIP_CONFIRM", not checked
+            )
+        )
+
+        self.ask_decommission_chk = QCheckBox("Ask before decommissioning a vial")
+        self.ask_decommission_chk.setChecked(not settings.suppress_decommission_confirm)
+        self.ask_decommission_chk.toggled.connect(
+            lambda checked: self._on_confirm_toggled(
+                "suppress_decommission_confirm",
+                "DDB_SUPPRESS_DECOMMISSION_CONFIRM",
+                not checked,
+            )
+        )
+
+        tip = QLabel(
+            "<i>Both persist to .env. Unchecked means the workflow runs "
+            "straight through without a dialog — helpful for bulk cleanup, "
+            "risky if you're new to the app.</i>"
+        )
+        tip.setStyleSheet("color: #666;")
+        tip.setWordWrap(True)
+
+        lo = QVBoxLayout(box)
+        lo.addWidget(self.ask_flip_chk)
+        lo.addWidget(self.ask_decommission_chk)
+        lo.addWidget(tip)
+        return box
+
+    def _on_confirm_toggled(
+        self, settings_attr: str, env_key: str, suppress: bool
+    ) -> None:
+        setattr(settings, settings_attr, suppress)
+        with contextlib.suppress(OSError):
+            _upsert_env_var(_env_path(), env_key, "1" if suppress else "0")
 
     # ------------------------------------------------------------------
     # Debug toggle
