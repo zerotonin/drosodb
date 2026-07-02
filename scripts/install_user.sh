@@ -109,12 +109,35 @@ fi
 # shellcheck disable=SC1090
 source "$CONDA_SH"
 
+# The classic solver takes 5–15 minutes on this environment.yml
+# (20+ packages, conda-forge). libmamba is bundled with conda 24.x+
+# and finishes the same solve in ~30 seconds. Prefer it whenever
+# available; fall back silently if the flag isn't recognised (older
+# conda), so the script still runs — just slowly.
+SOLVER_FLAG=""
+if conda env create --help 2>&1 | grep -q -- "--solver"; then
+    SOLVER_FLAG="--solver=libmamba"
+    log "using libmamba solver (much faster on multi-package envs)"
+else
+    warn "your conda is pre-24.x — env create will use the slow classic"
+    warn "solver. Speed it up permanently with:"
+    warn "    conda install -n base -c conda-forge conda-libmamba-solver -y"
+    warn "    conda config --set solver libmamba"
+fi
+
 if conda env list | awk '{print $1}' | grep -qxF "$CONDA_ENV"; then
     log "conda env '$CONDA_ENV' exists — updating (prune orphans)"
-    conda env update -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" --prune
+    # shellcheck disable=SC2086  # SOLVER_FLAG is either empty or one token
+    conda env update -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" \
+        --prune $SOLVER_FLAG
 else
     log "creating conda env '$CONDA_ENV' from environment.yml"
-    conda env create -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml"
+    log "(if this pauses on 'Collecting package metadata' for more than"
+    log " ~60s, hit Ctrl+C and re-run — libmamba occasionally needs a"
+    log " warm cache)"
+    # shellcheck disable=SC2086
+    conda env create -n "$CONDA_ENV" -f "$INSTALL_DIR/environment.yml" \
+        $SOLVER_FLAG
 fi
 
 conda activate "$CONDA_ENV"
