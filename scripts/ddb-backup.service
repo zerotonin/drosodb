@@ -1,0 +1,18 @@
+[Unit]
+Description=DDB SQLite snapshot + optional offsite push
+Documentation=https://github.com/zerotonin/drosodb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/ddb/backup.env
+ExecStart=/usr/local/sbin/ddb-backup
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/ddb/backups
+NoNewPrivileges=true

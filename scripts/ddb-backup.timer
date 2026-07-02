@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly DDB backup timer
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=ddb-backup.service
+
+[Install]
+WantedBy=timers.target

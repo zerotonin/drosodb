@@ -31,58 +31,111 @@ applies.
 
 ## Offline backups
 
-The SQLite DB is snapshotted **hourly** to `~/Crypt/drosodb/` (which is
-typically a Syncthing folder, so it ends up on other machines for free).
+On a shared tablet the DB is written to by whichever biologist happens
+to be logged in — nobody's home cron / Syncthing can be assumed to be
+running. Backups therefore live at the **system level**: a
+`ddb-backup.timer` fires hourly regardless of who is (or isn't) signed
+in, and pushes snapshots to a cloud remote via `rclone` if configured.
+
+### One-time install
+
+```bash
+sudo bash scripts/setup_system_backup.sh
+```
+
+This is idempotent — re-run it after any `git pull` that touches the
+scripts. It:
+
+- Creates `/srv/ddb/backups/{,history}` (`root:ddb`, mode 2775 so the
+  group inherits automatically).
+- Installs the backup script to `/usr/local/sbin/ddb-backup`.
+- Installs `ddb-backup.service` (oneshot) + `ddb-backup.timer` (hourly
+  with `Persistent=true`) under `/etc/systemd/system/`.
+- Seeds `/etc/ddb/backup.env` with commented defaults (won't overwrite
+  operator edits on re-runs).
+- Enables + starts the timer.
 
 ### How it works
 
-- Script: `~/PyProject/drosodb_backup.sh` (sits **outside** the repo —
-  never tracked by git).
-- It uses SQLite's online `.backup` API rather than `cp`, so the copy is
-  consistent even if the GUI writes during the snapshot.
-- Drops two files each hour:
-  - `~/Crypt/drosodb/ddb.latest.sqlite3` — stable filename (what
-    Syncthing / any live-replica tool should point at).
-  - `~/Crypt/drosodb/history/ddb_<UTC-timestamp>.sqlite3` — rollback
-    ladder. Keeps the most recent **168** snapshots (one week of
-    hourlies); older ones auto-prune.
-- Log: `~/PyProject/drosodb_backup.log`.
+- Runs as root from `ddb-backup.service`, so it's independent of any
+  user's login session.
+- Uses Python's stdlib `sqlite3.Connection.backup()` — a consistent
+  copy is guaranteed even while the GUI writes during the snapshot.
+- Drops each hour:
+  - `/srv/ddb/backups/ddb.latest.sqlite3` — stable filename.
+  - `/srv/ddb/backups/history/ddb_<UTC-timestamp>.sqlite3` — rollback
+    ladder, most-recent **168** snapshots (one week of hourlies); older
+    ones auto-prune.
+- Timer runs hourly on `OnCalendar=hourly` with `Persistent=true`, so
+  a missed hour (tablet powered off) catches up on next boot.
+- Logs to the systemd journal — `journalctl -u ddb-backup.service`.
 
-### Installed cron entry
+### Enabling offsite push (optional)
 
+The local snapshots survive a DB corruption but not a stolen tablet.
+To ship copies off the machine via `rclone`:
+
+```bash
+sudo apt install rclone
+sudo rclone --config /etc/ddb/rclone.conf config
+# → walk through the wizard to add a remote; call it e.g. "ddb-backup"
+sudo $EDITOR /etc/ddb/backup.env
+# → set DDB_BACKUP_RCLONE_REMOTE=ddb-backup:drosodb (or your bucket path)
 ```
-7 * * * * /home/geuba03p/PyProject/drosodb_backup.sh
-```
 
-Runs at **:07 past every hour**. Confirm it's live with `crontab -l`.
+The next timer tick will `rclone copy` the latest snapshot and
+`rclone sync` the history dir. Cloud remote works with anything rclone
+speaks — S3, Google Drive, WebDAV, Nextcloud, ownCloud, Backblaze B2,
+etc.
 
-### Overrides (env vars you can put in the crontab line)
+### Config knobs (edit `/etc/ddb/backup.env`)
 
 | Variable | Default | Use for |
 |---|---|---|
-| `DDB_BACKUP_SRC` | `~/PyProject/drosodb/ddb.sqlite3` | Alternative DB path |
-| `DDB_BACKUP_DEST` | `~/Crypt/drosodb` | Different backup target |
-| `DDB_BACKUP_SQLITE3` | `~/miniconda3/bin/sqlite3` | Alternative sqlite3 binary |
-| `DDB_BACKUP_RCLONE` | `~/miniconda3/envs/ddb/bin/rclone` | Alternative rclone binary |
-
-`RETAIN_HOURLY` (default 168) is a constant inside the script — edit
-there if you want more or fewer snapshots kept.
+| `DDB_BACKUP_SRC` | `/srv/ddb/ddb.sqlite3` | Alternative DB path |
+| `DDB_BACKUP_DEST` | `/srv/ddb/backups` | Different backup target |
+| `DDB_BACKUP_RETAIN_HOURLY` | `168` | Snapshots to retain (one week) |
+| `DDB_BACKUP_RCLONE_CONFIG` | `/etc/ddb/rclone.conf` | rclone config path |
+| `DDB_BACKUP_RCLONE_REMOTE` | *(empty → skip push)* | e.g. `ddb-backup:drosodb` |
+| `DDB_BACKUP_RCLONE_BIN` | `/usr/bin/rclone` | Non-standard rclone binary |
 
 ### Verifying a snapshot
 
-Any of the `history/` files is a full, valid SQLite database. To poke at
-one without disturbing the live DB:
+Any of the `history/` files is a full, valid SQLite database:
 
 ```bash
-sqlite3 ~/Crypt/drosodb/history/ddb_20260423T143014Z.sqlite3 \
+sqlite3 /srv/ddb/backups/history/ddb_20260703T143014Z.sqlite3 \
   "SELECT COUNT(*) FROM vial WHERE is_active = 1;"
+```
+
+Or fire a snapshot manually right now:
+
+```bash
+sudo systemctl start ddb-backup.service
+journalctl -u ddb-backup.service -n 30
 ```
 
 ### Restoring from backup
 
-1. Stop the GUI (`Ctrl-C` in its terminal, or close the window).
-2. `cp ~/Crypt/drosodb/ddb.latest.sqlite3 ~/PyProject/drosodb/ddb.sqlite3`
-3. Relaunch with `ddb gui`.
+1. Stop everyone's GUI (close the app on every logged-in account).
+2. `sudo cp /srv/ddb/backups/ddb.latest.sqlite3 /srv/ddb/ddb.sqlite3`
+3. Fix ownership + perms:
+   `sudo chown geuba03p:ddb /srv/ddb/ddb.sqlite3 && sudo chmod 664 /srv/ddb/ddb.sqlite3`
+4. Relaunch with `ddb gui`.
 
 Pick a specific `history/` file instead of `ddb.latest.sqlite3` if you
 need to roll back further than the last hour.
+
+### Migrating from the old per-user cron backup
+
+The pre-shared-tablet setup ran a personal per-user backup script
+from a crontab, dropping snapshots into a Syncthing folder in the
+maintainer's home directory. Once the system timer above has fired at
+least once and you've confirmed the new snapshots are landing, retire
+the old setup:
+
+```bash
+crontab -l                                     # confirm the old line is there
+crontab -e                                     # delete the line pointing at the old script
+rm -f /path/to/your/old-drosodb_backup.sh      # old script (wherever you kept it)
+```
