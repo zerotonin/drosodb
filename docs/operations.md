@@ -61,11 +61,25 @@ scripts. It:
   user's login session.
 - Uses Python's stdlib `sqlite3.Connection.backup()` — a consistent
   copy is guaranteed even while the GUI writes during the snapshot.
-- Drops each hour:
-  - `/srv/ddb/backups/ddb.latest.sqlite3` — stable filename.
-  - `/srv/ddb/backups/history/ddb_<UTC-timestamp>.sqlite3` — rollback
-    ladder, most-recent **168** snapshots (one week of hourlies); older
-    ones auto-prune.
+- **Content-addressed dedupe.** Every hour it takes a snapshot, then
+  SHA-256s the result and compares to `/srv/ddb/backups/.last-hash`
+  (the hash of the last successfully-shipped snapshot). If they match,
+  the candidate is discarded — no history entry, no rclone push, only
+  `ddb.latest.sqlite3`'s mtime gets touched to show "we checked, still
+  current". Because the DB is idle for long stretches (weekends,
+  overnight), this collapses most days to zero cloud traffic.
+- Retention (`DDB_BACKUP_RETAIN_HOURLY`, default **168**) therefore
+  counts **unique states**, not hours. On a low-turnover DB, 168
+  entries cover months, not one week — the ladder always shows real
+  change events instead of empty repeats.
+- Files:
+  - `/srv/ddb/backups/ddb.latest.sqlite3` — stable filename, updated
+    on any change.
+  - `/srv/ddb/backups/history/ddb_<UTC-timestamp>.sqlite3` — one entry
+    per unique state, oldest auto-prune once retention is hit.
+  - `/srv/ddb/backups/.last-hash` — bookkeeping for the dedupe check;
+    only bumped after the whole pipeline (snapshot + optional rclone
+    push) succeeds, so a failed push retries next hour.
 - Timer runs hourly on `OnCalendar=hourly` with `Persistent=true`, so
   a missed hour (tablet powered off) catches up on next boot.
 - Logs to the systemd journal — `journalctl -u ddb-backup.service`.

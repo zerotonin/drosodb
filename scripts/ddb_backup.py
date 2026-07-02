@@ -20,6 +20,7 @@ stable-name copy at DDB_BACKUP_DEST/ddb.latest.sqlite3.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -54,8 +55,37 @@ log = logging.getLogger("ddb-backup")
 # └────────────────────────────────────────────────────────────┘
 
 
-def snapshot(src: Path, dest_dir: Path) -> Path:
-    """Create a consistent snapshot of *src* under *dest_dir*/history/."""
+HASH_FILE_NAME = ".last-hash"
+
+
+def _sha256(path: Path) -> str:
+    """Streaming SHA-256 hex digest of *path*."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshot(src: Path, dest_dir: Path) -> tuple[Path | None, str]:
+    """Create a consistent snapshot of *src* under *dest_dir*/history/.
+
+    Content-addressed dedupe: after taking the snapshot, its SHA-256 is
+    compared against ``dest_dir/.last-hash`` (the hash of the last
+    successfully-shipped snapshot). If it matches, the candidate is
+    discarded — no history entry, no push, no bump. Only ``ddb.latest``'s
+    mtime is touched so log watchers can see we ran and confirmed
+    "still current".
+
+    Returns ``(target_path_or_None, sha256_hex)``:
+      * ``target_path`` is the retained history file when content changed.
+      * ``target_path`` is ``None`` when nothing changed and the caller
+        should skip prune + rclone push.
+      * ``sha256_hex`` is the hash either way — the caller writes it to
+        ``.last-hash`` *only after* any downstream steps (rclone push)
+        succeed, so a failed push retries next hour instead of being
+        silenced.
+    """
     if not src.exists():
         raise FileNotFoundError(f"source DB not found: {src}")
 
@@ -74,10 +104,33 @@ def snapshot(src: Path, dest_dir: Path) -> Path:
         target.unlink(missing_ok=True)
         raise
 
+    new_hash = _sha256(target)
+
+    hash_file = dest_dir / HASH_FILE_NAME
+    prev_hash = ""
+    if hash_file.exists():
+        prev_hash = hash_file.read_text(encoding="utf-8").strip()
+
     latest = dest_dir / "ddb.latest.sqlite3"
+
+    if new_hash == prev_hash:
+        # Same content as last shipped snapshot — discard candidate, keep
+        # the previous ladder as-is. Touch latest so its mtime reflects
+        # "confirmed current at $now".
+        target.unlink(missing_ok=True)
+        if latest.exists():
+            os.utime(latest, None)
+        log.info("no change since last snapshot (hash=%s…); skipping", new_hash[:12])
+        return None, new_hash
+
     shutil.copy2(target, latest)
-    log.info("snapshot ok: %s (%d bytes)", target.name, target.stat().st_size)
-    return target
+    log.info(
+        "snapshot ok: %s (%d bytes, hash=%s…)",
+        target.name,
+        target.stat().st_size,
+        new_hash[:12],
+    )
+    return target, new_hash
 
 
 def prune_history(dest_dir: Path, keep: int) -> int:
@@ -177,9 +230,17 @@ def main() -> int:
     )
     try:
         DEST.mkdir(parents=True, exist_ok=True)
-        snapshot(SRC, DEST)
+        new_snap, new_hash = snapshot(SRC, DEST)
+        if new_snap is None:
+            log.info("done (unchanged — no prune, no push)")
+            return 0
         prune_history(DEST, RETAIN_HOURLY)
         rclone_push(DEST)
+        # Push either succeeded or was intentionally skipped (no remote /
+        # rclone missing / config missing — all logged inside rclone_push).
+        # Only mark this hash as "shipped" now, so any subprocess failure
+        # above bubbles up and the same content gets retried next hour.
+        (DEST / HASH_FILE_NAME).write_text(new_hash, encoding="utf-8")
     except Exception as exc:
         log.error("backup failed: %s", exc, exc_info=True)
         return 1
