@@ -169,25 +169,46 @@ When a pack is found the env is untarred + `conda-unpack`-ed in seconds
 ### Per-user printer access
 
 If the tablet has a Bluetooth label printer, every user needs two
-extras on top of what `install_user.sh` provisions:
+extras on top of what `install_user.sh` provisions: bluetooth-group
+membership (admin, one-off) and the printer `.env` (self-service or
+admin, per user).
+
+**Admin (once per new user):**
 
 ```bash
-# 1. Bluetooth group membership — required for BlueZ socket access.
-#    Takes effect on their next login.
-sudo usermod -aG bluetooth <user>
-
-# 2. Printer settings written into their per-user .env — reuses the
-#    tablet's MAC / model / label size (defined in the script).
-sudo bash scripts/write_user_printer_env.sh <user1> <user2> …
-# → with no args, defaults to the current tablet's user list.
+sudo usermod -aG bluetooth <user>   # takes effect on their next login
 ```
 
-Without step 1 BlueZ refuses the RFCOMM socket; without step 2 the
-GUI's Print button stays greyed out (`settings.printer_enabled`
-defaults to `False`). The `.env` script is idempotent — it diffs
-against the existing file and only rewrites when the content differs.
-Have each affected user close and reopen the GUI so pydantic re-reads
-`.env` at process startup.
+**Then either path works for the .env — pick whichever fits.**
+
+*(a) Self-service — each biologist runs this from their own account,
+no sudo needed:*
+
+```bash
+bash ~/PyProject/drosodb/scripts/setup_my_printer.sh
+# writes .env into your clone, verifies pydantic sees it, reminds you
+# to close+reopen the GUI. Idempotent — safe to re-run.
+```
+
+*(b) Admin batch — for provisioning several users in one go:*
+
+```bash
+sudo bash scripts/write_user_printer_env.sh <user1> <user2> …
+# with no args, defaults to the current tablet's user list.
+```
+
+**Diagnostic when something still doesn't work:**
+
+```bash
+sudo bash scripts/diagnose_user_printer.sh
+# for each user: shows their repo clone location, the .env content,
+# what pydantic actually loads in a fresh Python, and whether they're
+# in the bluetooth group. Names the specific fix per row.
+```
+
+The most common gotcha: pydantic reads `.env` **once at process
+start**, so a GUI that was already running keeps its old settings
+until it's fully closed and reopened.
 
 Longer-term this per-user duplication should move to a shared file
 in `/etc/ddb/`, the way the backup config already does — filed as a

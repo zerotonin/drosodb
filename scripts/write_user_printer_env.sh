@@ -54,6 +54,36 @@ EOF
 )
 
 # ┌────────────────────────────────────────────────────────────┐
+# │ Clone discovery  « default, then fall back to a search »   │
+# └────────────────────────────────────────────────────────────┘
+#
+# install_user.sh's current default is $HOME/PyProject/drosodb, but
+# older installs may have used $HOME/drosodb. Find whichever is real
+# so this script works even if the user's clone predates the current
+# install layout.
+
+find_repo() {
+    local home="$1"
+    for candidate in \
+        "$home/PyProject/drosodb" \
+        "$home/drosodb" \
+        "$home/src/drosodb" \
+        "$home/code/drosodb"; do
+        if [[ -f "$candidate/pyproject.toml" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    find "$home" -maxdepth 4 -name pyproject.toml 2>/dev/null | while read -r pp; do
+        if grep -q '^name *= *"ddb"' "$pp" 2>/dev/null; then
+            dirname "$pp"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ┌────────────────────────────────────────────────────────────┐
 # │ Main                                                       │
 # └────────────────────────────────────────────────────────────┘
 
@@ -69,14 +99,13 @@ for u in "${USERS[@]}"; do
     fi
 
     home=$(getent passwd "$u" | cut -d: -f6)
-    repo="$home/PyProject/drosodb"
-    env_file="$repo/.env"
-
-    if [[ ! -d "$repo" ]]; then
-        echo "skip: $u — no repo clone at $repo (has install_user.sh been run?)"
+    repo=$(find_repo "$home")
+    if [[ -z "$repo" ]]; then
+        echo "skip: $u — no repo clone found under $home (has install_user.sh been run?)"
         STATUS_SKIPPED=$((STATUS_SKIPPED + 1))
         continue
     fi
+    env_file="$repo/.env"
 
     if [[ -f "$env_file" ]] \
         && diff -q <(printf '%s\n' "$ENV_CONTENT") "$env_file" >/dev/null 2>&1; then
