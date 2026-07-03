@@ -166,6 +166,33 @@ When a pack is found the env is untarred + `conda-unpack`-ed in seconds
 — no channel indexes, no package downloads. Ship a new pack whenever
 `environment.yml` changes.
 
+### Per-user printer access
+
+If the tablet has a Bluetooth label printer, every user needs two
+extras on top of what `install_user.sh` provisions:
+
+```bash
+# 1. Bluetooth group membership — required for BlueZ socket access.
+#    Takes effect on their next login.
+sudo usermod -aG bluetooth <user>
+
+# 2. Printer settings written into their per-user .env — reuses the
+#    tablet's MAC / model / label size (defined in the script).
+sudo bash scripts/write_user_printer_env.sh <user1> <user2> …
+# → with no args, defaults to the current tablet's user list.
+```
+
+Without step 1 BlueZ refuses the RFCOMM socket; without step 2 the
+GUI's Print button stays greyed out (`settings.printer_enabled`
+defaults to `False`). The `.env` script is idempotent — it diffs
+against the existing file and only rewrites when the content differs.
+Have each affected user close and reopen the GUI so pydantic re-reads
+`.env` at process startup.
+
+Longer-term this per-user duplication should move to a shared file
+in `/etc/ddb/`, the way the backup config already does — filed as a
+follow-up.
+
 ## Hardware supported
 
 | Device       | Model               | Transport                | Notes                                  |
