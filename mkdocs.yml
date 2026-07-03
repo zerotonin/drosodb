@@ -37,6 +37,7 @@ markdown_extensions:
 
 nav:
   - Overview: index.md
+  - Shared-tablet install: shared_tablet.md
   - Operations: operations.md
   - Spec (core): droso_db_project.md
   - Spec (extended): droso_db_project_extended.md
