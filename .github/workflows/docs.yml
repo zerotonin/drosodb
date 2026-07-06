@@ -15,11 +15,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-deploy:
+  # ── Build ────────────────────────────────────────────────────────────
+  # Split from deploy so a transient Pages backend hiccup can be re-run
+  # (deploy-only) without rebuilding the whole site.
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,5 +45,22 @@ jobs:
         with:
           path: site
 
+  # ── Deploy ───────────────────────────────────────────────────────────
+  # actions/deploy-pages intermittently returns "Deployment failed, try
+  # again later" from the Pages backend even on a perfectly good artifact.
+  # First attempt is soft (continue-on-error); a single retry clears the
+  # transient case without a manual re-run.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - id: deployment-retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
