@@ -240,6 +240,7 @@ DDB_SCAN_SOUND=1                    # audible 1-Up chirp on every QR decode
 
 # GUI tweaks
 DDB_GUI_FONT_SCALE=1.00             # 0.7-2.0; live via Ctrl+=/Ctrl+-/Ctrl+0
+DDB_GUI_UPDATE_CHECK=1              # check GitHub for updates at start-up
 
 # FlyBase genotype-import catalog
 DDB_FLYBASE_ENABLED=1

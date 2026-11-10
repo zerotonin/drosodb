@@ -108,6 +108,44 @@ The one-liner:
     biologists' installs finish in seconds instead of tens of
     minutes.
 
+### 2a. Keeping each copy up to date
+
+Every biologist has their own clone, so each copy updates on its own.
+No terminal is needed:
+
+1. A few seconds after DDB opens, it quietly checks GitHub. If a newer
+   version exists, the status bar shows **Update available (N)**.
+2. **Settings → Updates** shows the installed version, the list of
+   incoming changes, and an **Update now** button.
+3. After the update, DDB offers to restart itself.
+
+Under the hood this is `git fetch` followed by a fast-forward merge. When
+`pyproject.toml` changed, it also runs `pip install -e ".[gui,hardware]"`
+in the running environment. The update **refuses** rather than guessing
+when:
+
+- tracked files in the clone have local edits (`.env`,
+  `local_paths.json` and other untracked files are fine), or
+- the clone has its own commits that aren't on GitHub.
+
+Both are cases for someone comfortable with git.
+
+!!! warning "Schema changes need the admin"
+    The database is shared, so DDB never migrates it by itself. If an
+    update brings a new migration, Settings → Updates says
+    *Database schema is behind this version*. Once every biologist has
+    closed DDB, the admin runs this from any updated clone:
+
+    ```bash
+    alembic upgrade head
+    ```
+
+    A copy that hasn't been updated yet sees *The shared database was
+    upgraded by a newer DDB* and should be updated before use.
+
+On a tablet with no network at all, turn the start-up check off with
+`DDB_GUI_UPDATE_CHECK=0` in that user's `.env`.
+
 ---
 
 ## 3. Bluetooth printer access
@@ -390,6 +428,18 @@ crontab -l | grep -i drosodb
 
 Delete the line (`crontab -e`) and remove the old script. The
 system timer is enough.
+
+### "Could not check for updates" in Settings → Updates
+
+- **`timed out` / `Could not resolve host`**: the tablet is offline.
+  Harmless; the check runs again next time DDB opens.
+- **`Permission denied (publickey)`**: the clone uses an SSH remote
+  and no unlocked key is available to the desktop session. Biologist
+  clones made by `install_user.sh` use HTTPS and never hit this. For an
+  admin clone, unlock the key (`ssh-add`) or switch the remote to
+  HTTPS for read-only updates.
+- **`has no upstream`**: the clone is on a local branch. Run
+  `git checkout main` in the clone.
 
 ### Two biologists using the tablet at the same time
 
