@@ -51,6 +51,7 @@ from ddb.gui.font_scale import (
     clamp_font_scale,
 )
 from ddb.gui.printer_status import PrinterStatusLight, shared_monitor
+from ddb.gui.update_group import UpdateGroup
 from ddb.models import Donor, OrgUnit, User
 
 
@@ -89,6 +90,8 @@ class SettingsTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_identity_group())
+        self.update_group = UpdateGroup()
+        layout.addWidget(self.update_group)
         layout.addWidget(self._build_font_group())
         layout.addWidget(self._build_confirmations_group())
         layout.addWidget(self._build_debug_group())

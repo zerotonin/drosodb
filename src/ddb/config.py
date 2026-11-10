@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     # most laptop displays.
     gui_font_scale: float = 1.0
 
+    # Quietly `git fetch` a few seconds after the GUI opens and flag a
+    # pending update in the status bar. Offline failures stay silent.
+    # Set DDB_GUI_UPDATE_CHECK=0 on machines with no network at all.
+    gui_update_check: bool = True
+
     # Which genotype the "Flip all active vials for a genotype" dialog
     # preselects on open. Persisted so the common single-strain workflow
     # (e.g. the dark-flies cycle) is one-click. 0 = no last choice.

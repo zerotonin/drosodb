@@ -31,6 +31,7 @@ def test_gui_modules_importable() -> None:
         reports_tab,
         scan_tab,
         settings_tab,
+        update_group,
     )
     from ddb.gui.dialogs import printer_reconnect  # noqa: F401
 
@@ -44,6 +45,7 @@ def test_main_window_constructs_without_showing(monkeypatch) -> None:
     # Force-disable the printer so the background status monitor (which
     # would otherwise try a real BT probe) doesn't get started at all.
     monkeypatch.setattr(settings, "printer_enabled", False)
+    monkeypatch.setattr(settings, "gui_update_check", False)
 
     _qapp = QApplication.instance() or QApplication([])  # keep alive
     w = MainWindow()
@@ -66,6 +68,7 @@ def test_main_window_minimum_fits_small_screens(monkeypatch) -> None:
     from ddb.gui.main_window import MainWindow
 
     monkeypatch.setattr(settings, "printer_enabled", False)
+    monkeypatch.setattr(settings, "gui_update_check", False)
     _qapp = QApplication.instance() or QApplication([])  # noqa: F841 — keep alive
     w = MainWindow()
     try:
@@ -75,6 +78,21 @@ def test_main_window_minimum_fits_small_screens(monkeypatch) -> None:
     finally:
         w.scan_tab.shutdown()
         w.close()
+
+
+def test_update_group_off_git_shows_bare_version(tmp_path) -> None:
+    """A non-git install still renders the Updates box without touching git."""
+    from PySide6.QtWidgets import QApplication
+
+    from ddb import __version__
+    from ddb.gui.update_group import UpdateGroup
+
+    _qapp = QApplication.instance() or QApplication([])  # noqa: F841 — keep alive
+    box = UpdateGroup(repo=tmp_path)
+    assert __version__ in box.version_lbl.text()
+    assert box.check_btn.isEnabled()
+    assert not box.update_btn.isEnabled()
+    box.shutdown()
 
 
 def test_scan_tab_on_payload_accepts_compact_and_legacy() -> None:

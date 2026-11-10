@@ -40,6 +40,7 @@ from .settings_tab import SettingsTab
 
 DEFAULT_WINDOW_SIZE: tuple[int, int] = (1200, 720)
 SCREEN_FILL_FRACTION = 0.95
+STARTUP_UPDATE_CHECK_DELAY_MS = 3000
 
 
 def _scrollable(content: QWidget) -> QScrollArea:
@@ -143,6 +144,16 @@ class MainWindow(QMainWindow):
         # screen so the user sees DDB first, not a surprise dialog.
         QTimer.singleShot(500, self._check_catalog_refresh)
 
+        # Background `git fetch` shortly after start-up; a pending update
+        # shows as a permanent status-bar note. Failures stay silent here
+        # and are only spelled out in Settings → Updates.
+        self._update_lbl = QLabel()
+        self._update_lbl.hide()
+        self.statusBar().addPermanentWidget(self._update_lbl)
+        self.settings_tab.update_group.update_available.connect(self._on_update_available)
+        if settings.gui_update_check:
+            QTimer.singleShot(STARTUP_UPDATE_CHECK_DELAY_MS, self.settings_tab.update_group.check)
+
     # ------------------------------------------------------------------
     # Live font-size scaling — keyboard + Settings tab share this path
     # ------------------------------------------------------------------
@@ -186,6 +197,12 @@ class MainWindow(QMainWindow):
         with contextlib.suppress(OSError):
             self.settings_tab.persist_font_scale(clamped)
         self.statusBar().showMessage(f"Font scale: {clamped:.2f}×", 2000)
+
+    def _on_update_available(self, behind: int) -> None:
+        self._update_lbl.setText(
+            f"<b style='color:#0072B2;'>Update available ({behind})</b> — Settings → Updates"
+        )
+        self._update_lbl.show()
 
     def _on_default_camera_changed(self, role: str) -> None:
         idx = self.scan_tab.role_box.findText(role)
@@ -270,6 +287,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.scan_tab.shutdown()
+        self.settings_tab.update_group.shutdown()
         if self.printer_monitor is not None:
             self.printer_monitor.stop()
             self.printer_monitor.wait(3000)
