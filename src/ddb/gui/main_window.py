@@ -4,14 +4,17 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QStatusBar,
     QTabWidget,
+    QWidget,
 )
 from sqlmodel import Session
 
@@ -35,12 +38,44 @@ from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
 from .settings_tab import SettingsTab
 
+DEFAULT_WINDOW_SIZE: tuple[int, int] = (1200, 720)
+SCREEN_FILL_FRACTION = 0.95
+
+
+def _scrollable(content: QWidget) -> QScrollArea:
+    """Wrap a tab in a frameless scroll area.
+
+    A QTabWidget's minimum size is the largest minimum of all its tabs, so
+    one tall tab (Settings, ~1500 px at font scale 1.4) would otherwise pin
+    the whole window taller than a tablet screen. Inside a scroll area the
+    tab still stretches to fill the window, and scroll bars appear only
+    when the window is smaller than the content.
+    """
+    area = QScrollArea()
+    area.setWidget(content)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    return area
+
+
+def _initial_window_size() -> tuple[int, int]:
+    """Default window size, clamped to the primary screen's free area."""
+    width, height = DEFAULT_WINDOW_SIZE
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return width, height
+    avail = screen.availableGeometry()
+    return (
+        min(width, int(avail.width() * SCREEN_FILL_FRACTION)),
+        min(height, int(avail.height() * SCREEN_FILL_FRACTION)),
+    )
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DDB — Drosophila Vial Tracking")
-        self.resize(1200, 720)
+        self.resize(*_initial_window_size())
 
         # Single printer-status poller shared across tabs + dialogs. It
         # runs in its own QThread and publishes state changes via Qt
@@ -57,10 +92,10 @@ class MainWindow(QMainWindow):
         self.reports_tab = ReportsTab()
         self.genotypes_tab = GenotypesTab()
         self.settings_tab = SettingsTab()
-        self.tabs.addTab(self.scan_tab, "Scan")
-        self.tabs.addTab(self.reports_tab, "Reports")
-        self.tabs.addTab(self.genotypes_tab, "Genotypes")
-        self.tabs.addTab(self.settings_tab, "Settings")
+        self.tabs.addTab(_scrollable(self.scan_tab), "Scan")
+        self.tabs.addTab(_scrollable(self.reports_tab), "Reports")
+        self.tabs.addTab(_scrollable(self.genotypes_tab), "Genotypes")
+        self.tabs.addTab(_scrollable(self.settings_tab), "Settings")
 
         # Flip the snapshot-button visibility live when the user toggles
         # debug mode in Settings — saves a restart.
@@ -158,7 +193,8 @@ class MainWindow(QMainWindow):
             self.scan_tab.role_box.setCurrentIndex(idx)
 
     def _on_tab_changed(self, index: int) -> None:
-        widget = self.tabs.widget(index)
+        area = self.tabs.widget(index)
+        widget = area.widget() if isinstance(area, QScrollArea) else area
         if widget is self.reports_tab:
             self.reports_tab._refresh()  # re-run the currently-selected preset
         elif widget is self.genotypes_tab:

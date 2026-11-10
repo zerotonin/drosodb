@@ -56,6 +56,27 @@ def test_main_window_constructs_without_showing(monkeypatch) -> None:
     del w
 
 
+def test_main_window_minimum_fits_small_screens(monkeypatch) -> None:
+    """Regression: tabs sit in scroll areas, so a tall tab (Settings) can't
+    force the window's minimum height past a tablet screen. Before the fix
+    the minimum was ~1300 px at font scale 1.0 and ~1570 px at 1.4."""
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from ddb.config import settings
+    from ddb.gui.main_window import MainWindow
+
+    monkeypatch.setattr(settings, "printer_enabled", False)
+    _qapp = QApplication.instance() or QApplication([])  # noqa: F841 — keep alive
+    w = MainWindow()
+    try:
+        for i in range(w.tabs.count()):
+            assert isinstance(w.tabs.widget(i), QScrollArea), w.tabs.tabText(i)
+        assert w.minimumSizeHint().height() < 600
+    finally:
+        w.scan_tab.shutdown()
+        w.close()
+
+
 def test_scan_tab_on_payload_accepts_compact_and_legacy() -> None:
     """Regression: `_on_payload` must use `print_code` (not `entity_id`,
     which was renamed when Micro QR landed). A non-raising call with both
