@@ -46,6 +46,10 @@ with one SQLite file — not a multi-user SaaS.
   its ancestors and descendants.
 - **Modal dialogs dim the window behind them**, so a pop-up never
   blends into the main window (Qt's own Wayland frames have no shadow).
+- **Built-in user manual**: the **Help** button (or F1) opens
+  `docs/manual/index.md` at the section for the current tab, with a
+  contents tree and search. The same file is the manual on the docs
+  site, and a test fails when a GUI control isn't documented in it.
 - **Biosafety PDF report**: one-click PDF for institutional filings.
   Snapshot counts (active / decommissioned vials, in-stock / dropped
   genotypes), in-period activity (creates, flips, decommissions,
@@ -282,7 +286,7 @@ src/ddb/
                 PrinterReconnect, FlybaseDownload, AuditTrail,
                 LineageChart), shared widgets (GenotypeForm,
                 CameraWidget, PrinterStatusLight), modal backdrop,
-                theme (Wong palette)
+                Help window, theme (Wong palette)
   importers/    FlyStockTable CSV importer
   cli.py        typer CLI entry point
   config.py     pydantic-settings (env-driven)
@@ -292,10 +296,12 @@ src/ddb/
   lineage.py    vial lineage graph + CSV export
   lineage_layout.py  layered layout for the genealogy chart (pure)
   vial_history.py    readable per-vial audit trail
+  manual.py     locates and parses the user manual (no Qt)
   reports.py    search + detail queries
 tests/          ~290 unit + integration tests
 alembic/        SQLite migrations
-docs/           design docs + operations walkthrough
+docs/           design docs, operations walkthrough, user manual
+                (docs/manual/: index.md + generated screenshots)
 ```
 
 ## CLI reference (selected)
@@ -326,6 +332,9 @@ Run `ddb --help` or `ddb <subcommand> --help` for the full set.
 
 ## Further reading
 
+- `docs/manual/index.md` — the user manual (also in-app under Help / F1).
+  After a GUI change, update it and re-run
+  `python scripts/make_manual_screenshots.py`; see `CLAUDE.md`.
 - `docs/droso_db_project_extended.md` — full design spec.
 - `docs/operations.md` — manual reprint + backup walkthrough.
 - `docs/index.md` — docs landing page (published at
