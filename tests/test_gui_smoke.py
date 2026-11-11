@@ -231,3 +231,77 @@ def test_reports_tab_vial_buttons_follow_selection() -> None:
         tab.table.selectRow(0)
         assert tab.audit_btn.isEnabled() and tab.lineage_btn.isEnabled()
     tab.close()
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Regressions: decommission without a reason, .env location
+# ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def private_engine(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
+    """In-memory engine patched into the detail panel; never the real DB."""
+    from sqlalchemy.pool import StaticPool
+    from sqlmodel import SQLModel, create_engine
+
+    import ddb.gui.vial_detail_panel as panel_module
+    from ddb import current_user
+    from ddb.config import settings
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(panel_module, "engine", engine)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "actor_username_override", None)
+    current_user.clear_cache()
+    yield engine
+    current_user.clear_cache()
+
+
+@pytest.mark.parametrize("reason", [None, "", "   "])
+def test_decommission_without_reason_retires_the_vial(private_engine, monkeypatch, reason) -> None:  # noqa: ANN001
+    """A blank reason (or the confirmation switched off) used to crash on .strip()."""
+    from sqlmodel import Session
+
+    import ddb.gui.vial_detail_panel as panel_module
+    from ddb.config import settings
+    from ddb.models import Genotype, Vial
+    from ddb.reports import vial_detail
+    from ddb.workflows import create_vial
+
+    _qapp()
+    with Session(private_engine) as session:
+        genotype = Genotype(name="w1118")
+        session.add(genotype)
+        session.commit()
+        vial = create_vial(session, genotype_id=genotype.id).vial
+        vial_id, code = vial.id, vial.print_code
+        detail = vial_detail(session, vial_id)
+
+    if reason is None:
+        monkeypatch.setattr(settings, "suppress_decommission_confirm", True)
+    else:
+        monkeypatch.setattr(settings, "suppress_decommission_confirm", False)
+
+        class _Accepting:
+            def __init__(self, *_args: object) -> None: ...
+            def exec(self) -> int:
+                return panel_module.QDialog.DialogCode.Accepted
+
+            def reason(self) -> str:
+                return reason
+
+            def suppress_future(self) -> bool:
+                return False
+
+        monkeypatch.setattr(panel_module, "_DecommissionDialog", _Accepting)
+
+    panel = panel_module.DetailPanel()
+    panel.show_detail(detail, code)
+    panel._decommission()
+
+    with Session(private_engine) as session:
+        assert not session.get(Vial, vial_id).is_active
+    panel.close()

@@ -441,7 +441,7 @@ class DetailPanel(QWidget):
                     s,
                     print_code=code,
                     actor_id=current_user_id(s),
-                    reason=reason.strip() or None,
+                    reason=(reason or "").strip() or None,
                 )
         except VialNotFoundError as e:
             QMessageBox.warning(self, "Decommission failed", str(e))
