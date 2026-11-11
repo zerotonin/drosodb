@@ -119,10 +119,19 @@ No terminal is needed:
    incoming changes, and an **Update now** button.
 3. After the update, DDB offers to restart itself.
 
-Under the hood this is `git fetch` followed by a fast-forward merge. When
-`pyproject.toml` changed, it also runs `pip install -e ".[gui,hardware]"`
-in the running environment. The update **refuses** rather than guessing
-when:
+Under the hood this is `git fetch` followed by a fast-forward merge. The
+install is editable, so code, new modules and data files take effect on
+the next start with no reinstall. `pip install -e ".[gui,hardware]"` runs
+only when the new version needs a package (or package version) that this
+user's environment doesn't have yet, or when the `ddb` command itself
+changed. Edits to tool settings in `pyproject.toml` (ruff, pytest, the CI
+extra) don't trigger it.
+
+If someone ran a plain `git pull` in a terminal, nothing gets installed.
+The next check then reports **Packages missing**, and **Update now**
+installs them.
+
+The update **refuses** rather than guessing when:
 
 - tracked files in the clone have local edits (`.env`,
   `local_paths.json` and other untracked files are fine), or
