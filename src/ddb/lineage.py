@@ -7,13 +7,16 @@ Two independent relationships can link vials:
 Both are followed, so the result is a DAG that's ready for the future
 cross workflow even though we're only flipping today.
 
-Returns sorted rows suitable for CSV export or a UI table.
+Returns sorted rows suitable for CSV export or a UI table, or a
+`LineageGraph` (nodes + parent→child edges) for the genealogy chart.
 """
 
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -154,3 +157,101 @@ def export_lineage_csv(session: Session, vial_id: int, out_path: Path) -> Path:
         for r in rows:
             writer.writerow(r.as_row())
     return out_path
+
+
+@dataclass(frozen=True)
+class LineageNode:
+    """One vial in a genealogy chart."""
+
+    vial_id: int
+    print_code: str
+    generation: int
+    is_active: bool
+    genotype_name: str
+    created_at: datetime
+    decommissioned_at: datetime | None
+
+
+@dataclass(frozen=True)
+class LineageEdge:
+    """Parent → child link. ``kind`` is ``flip`` or the cross role."""
+
+    parent_id: int
+    child_id: int
+    kind: str
+
+
+@dataclass(frozen=True)
+class LineageGraph:
+    """Ancestors and descendants of ``focus_id``, with the links between them."""
+
+    focus_id: int
+    nodes: dict[int, LineageNode]
+    edges: tuple[LineageEdge, ...]
+
+    @property
+    def ancestor_ids(self) -> set[int]:
+        return self._walk(lambda e: (e.child_id, e.parent_id))
+
+    @property
+    def descendant_ids(self) -> set[int]:
+        return self._walk(lambda e: (e.parent_id, e.child_id))
+
+    def _walk(self, direction: Callable[[LineageEdge], tuple[int, int]]) -> set[int]:
+        links: dict[int, list[int]] = {}
+        for edge in self.edges:
+            src, dst = direction(edge)
+            links.setdefault(src, []).append(dst)
+        seen: set[int] = set()
+        stack = [self.focus_id]
+        while stack:
+            for nxt in links.get(stack.pop(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
+
+def lineage_graph(session: Session, vial_id: int) -> LineageGraph:
+    """Build the genealogy graph (ancestors + descendants) of one vial.
+
+    Raises:
+        LookupError: no vial with that id.
+    """
+    if session.get(Vial, vial_id) is None:
+        raise LookupError(f"No vial with id {vial_id}")
+    ids = lineage_ids(session, vial_id)
+    vials = session.exec(select(Vial).where(Vial.id.in_(ids))).all()  # type: ignore[union-attr]
+    genotype_names = {
+        g.id: g.name
+        for g in session.exec(
+            select(Genotype).where(Genotype.id.in_({v.genotype_id for v in vials}))  # type: ignore[union-attr]
+        ).all()
+    }
+    nodes = {
+        v.id: LineageNode(
+            vial_id=v.id,
+            print_code=v.print_code,
+            generation=v.generation,
+            is_active=v.is_active,
+            genotype_name=genotype_names.get(v.genotype_id, ""),
+            created_at=v.created_at,
+            decommissioned_at=v.decommissioned_at,
+        )
+        for v in vials
+    }
+    edges = [
+        LineageEdge(parent_id=v.flipped_from_id, child_id=v.id, kind="flip")
+        for v in vials
+        if v.flipped_from_id in nodes
+    ]
+    crosses = session.exec(
+        select(VialParentage).where(VialParentage.child_id.in_(ids))  # type: ignore[attr-defined]
+    ).all()
+    edges += [
+        LineageEdge(parent_id=c.parent_id, child_id=c.child_id, kind=c.role)
+        for c in crosses
+        if c.parent_id in nodes
+    ]
+    edges.sort(key=lambda e: (e.parent_id, e.child_id, e.kind))
+    return LineageGraph(focus_id=vial_id, nodes=nodes, edges=tuple(edges))

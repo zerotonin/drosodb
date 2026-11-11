@@ -26,14 +26,20 @@ def test_gui_modules_importable() -> None:
         camera_widget,
         frame_grabber,
         genotypes_tab,
+        lineage_scene,
         main_window,
+        modal_scrim,
         printer_status,
         reports_tab,
         scan_tab,
         settings_tab,
         update_group,
     )
-    from ddb.gui.dialogs import printer_reconnect  # noqa: F401
+    from ddb.gui.dialogs import (  # noqa: F401
+        audit_trail,
+        lineage_chart,
+        printer_reconnect,  # noqa: F401
+    )
 
 
 def test_main_window_constructs_without_showing(monkeypatch) -> None:
@@ -115,3 +121,113 @@ def test_scan_tab_on_payload_accepts_compact_and_legacy() -> None:
     tab._on_payload("not a ddb payload")
     tab.close()
     del tab
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Modal backdrop, audit trail, genealogy
+# ─────────────────────────────────────────────────────────────────
+
+
+def _qapp():  # noqa: ANN202
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def test_modal_scrim_dims_parent_only_while_modal_dialog_open() -> None:
+    from PySide6.QtWidgets import QDialog, QWidget
+
+    from ddb.gui.modal_scrim import ModalScrim
+
+    app = _qapp()
+    scrim = ModalScrim(app)
+    host = QWidget()
+    host.resize(400, 300)
+    host.show()
+    try:
+        modeless = QDialog(host)
+        modeless.show()
+        app.processEvents()
+        assert not scrim.is_dimmed(host), "non-modal dialogs must not dim"
+        modeless.close()
+
+        modal = QDialog(host)
+        modal.open()  # window-modal, non-blocking
+        app.processEvents()
+        assert scrim.is_dimmed(host)
+
+        nested = QDialog(modal)
+        nested.open()
+        app.processEvents()
+        assert scrim.is_dimmed(modal), "a dialog opened from a dialog dims that dialog"
+        nested.close()
+        app.processEvents()
+        assert not scrim.is_dimmed(modal)
+        assert scrim.is_dimmed(host)
+
+        modal.close()
+        app.processEvents()
+        assert not scrim.is_dimmed(host)
+    finally:
+        app.removeEventFilter(scrim)
+        host.close()
+
+
+@pytest.fixture()
+def vial_family(session, tmp_path, monkeypatch):  # noqa: ANN001, ANN201
+    from ddb.config import settings
+    from ddb.models import Genotype, User
+    from ddb.workflows import create_vial, flip_vial, multiply_vial
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    user, geno = User(username="ella"), Genotype(name="nlg4 KO70")
+    session.add_all([user, geno])
+    session.commit()
+    root = create_vial(session, genotype_id=geno.id, actor_id=user.id).vial
+    middle = flip_vial(session, old_print_code=root.print_code, actor_id=user.id).vial
+    multiply_vial(session, old_print_code=middle.print_code, count=3, actor_id=user.id)
+    return session, middle
+
+
+def test_genealogy_dialog_draws_every_vial_and_arrow(vial_family) -> None:  # noqa: ANN001
+    from ddb.gui.dialogs.lineage_chart import LineageDialog
+    from ddb.gui.lineage_scene import LinkArrow, VialCard
+    from ddb.lineage import lineage_graph
+
+    session, middle = vial_family
+    _qapp()
+    graph = lineage_graph(session, middle.id)
+    dialog = LineageDialog(graph)
+    cards = [i for i in dialog.scene.items() if isinstance(i, VialCard)]
+    arrows = [i for i in dialog.scene.items() if isinstance(i, LinkArrow)]
+    assert len(cards) == 5 and len(arrows) == 4
+    assert dialog.scene.focus_card.node.vial_id == middle.id
+    assert middle.print_code in dialog.windowTitle()
+    dialog.close()
+
+
+def test_audit_trail_dialog_lists_every_event(vial_family) -> None:  # noqa: ANN001
+    from ddb.gui.dialogs.audit_trail import AuditTrailDialog
+    from ddb.reports import vial_detail
+    from ddb.vial_history import vial_audit_trail
+
+    session, middle = vial_family
+    _qapp()
+    entries = vial_audit_trail(session, middle.id)
+    dialog = AuditTrailDialog(vial_detail(session, middle.id), entries)
+    assert dialog.table.rowCount() == len(entries) == 2
+    assert dialog.table.item(1, 2).text() == "Multiplied into"
+    dialog.close()
+
+
+def test_reports_tab_vial_buttons_follow_selection() -> None:
+    from ddb.gui.reports_tab import ReportsTab
+
+    _qapp()
+    tab = ReportsTab()
+    tab.table.clearSelection()
+    assert not tab.audit_btn.isEnabled() and not tab.lineage_btn.isEnabled()
+    if tab.model.rowCount() > 0:
+        tab.table.selectRow(0)
+        assert tab.audit_btn.isEnabled() and tab.lineage_btn.isEnabled()
+    tab.close()

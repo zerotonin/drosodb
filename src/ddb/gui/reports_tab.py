@@ -7,7 +7,11 @@ Layout:
     │ CODE   GEN  GENO        NOTATION          OWNER   DONOR   CREATED │
     │ ...                                                               │
     ─────────────────────────────────────────────────────────────────────
-    N vials.
+    N vials.                                [Audit trail…] [Genealogy…]
+
+Double-clicking a row opens that vial's audit trail; "Genealogy…" shows
+its ancestors and descendants as a flow chart. Both are also on the
+right-click menu.
 
 Each preset button is a one-liner call into `search_vials` — the backend
 already composes arbitrary filter combinations, so adding more presets
@@ -18,7 +22,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -26,6 +30,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTableView,
@@ -36,6 +41,8 @@ from sqlmodel import Session
 
 from ddb.config import settings
 from ddb.db import engine
+from ddb.gui.dialogs.audit_trail import show_audit_trail
+from ddb.gui.dialogs.lineage_chart import show_lineage
 from ddb.reports import VialRow, search_vials
 
 
@@ -141,10 +148,23 @@ class ReportsTab(QWidget):
         self.status = QLabel("Pick a preset above to load vials.")
         self.status.setStyleSheet("color: #666;")
 
+        self.audit_btn = QPushButton("Audit trail…")
+        self.audit_btn.setToolTip(
+            "Every recorded event of the selected vial (or double-click a row)"
+        )
+        self.lineage_btn = QPushButton("Genealogy…")
+        self.lineage_btn.setToolTip(
+            "Ancestors and descendants of the selected vial as a flow chart"
+        )
+        footer = QHBoxLayout()
+        footer.addWidget(self.status, stretch=1)
+        footer.addWidget(self.audit_btn)
+        footer.addWidget(self.lineage_btn)
+
         layout = QVBoxLayout(self)
         layout.addLayout(controls)
         layout.addWidget(self.table)
-        layout.addWidget(self.status)
+        layout.addLayout(footer)
 
         self.active_btn.clicked.connect(self._show_active)
         self.all_btn.clicked.connect(self._show_all)
@@ -152,6 +172,15 @@ class ReportsTab(QWidget):
         self.mine_btn.clicked.connect(self._show_mine)
         self.biosec_btn.clicked.connect(self._generate_biosec_pdf)
         self.search_edit.textChanged.connect(self._refresh)
+
+        self.table.doubleClicked.connect(lambda index: self._open_audit_trail(index.row()))
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_row_menu)
+        self.table.selectionModel().selectionChanged.connect(self._update_vial_buttons)
+        self.model.modelReset.connect(self._update_vial_buttons)
+        self.audit_btn.clicked.connect(lambda: self._open_audit_trail(self._selected_row()))
+        self.lineage_btn.clicked.connect(lambda: self._open_lineage(self._selected_row()))
+        self._update_vial_buttons()
 
         # Remember which preset is active so typing in the filter re-applies
         # it instead of resetting back to "everything".
@@ -194,7 +223,43 @@ class ReportsTab(QWidget):
             rows = fn(s, **kwargs)
         self.model.set_rows(rows)
         filter_msg = f" matching {needle!r}" if needle else ""
-        self.status.setText(f"{label}{filter_msg}: {len(rows)} row{'s' if len(rows) != 1 else ''}.")
+        plural = "s" if len(rows) != 1 else ""
+        hint = "  Double-click a vial for its audit trail." if rows else ""
+        self.status.setText(f"{label}{filter_msg}: {len(rows)} row{plural}.{hint}")
+
+    # --- Per-vial history ----------------------------------------------
+
+    def _selected_row(self) -> int:
+        rows = self.table.selectionModel().selectedRows()
+        return rows[0].row() if rows else -1
+
+    def _update_vial_buttons(self) -> None:
+        has_vial = self.model.row_at(self._selected_row()) is not None
+        self.audit_btn.setEnabled(has_vial)
+        self.lineage_btn.setEnabled(has_vial)
+
+    def _open_audit_trail(self, row_index: int) -> None:
+        row = self.model.row_at(row_index)
+        if row is not None:
+            show_audit_trail(self, row.vial_id)
+
+    def _open_lineage(self, row_index: int) -> None:
+        row = self.model.row_at(row_index)
+        if row is not None:
+            show_lineage(self, row.vial_id)
+
+    def _show_row_menu(self, pos: QPoint) -> None:
+        index = self.table.indexAt(pos)
+        row = self.model.row_at(index.row()) if index.isValid() else None
+        if row is None:
+            return
+        self.table.selectRow(index.row())
+        menu = QMenu(self)
+        menu.addAction(
+            f"Audit trail of {row.print_code}…", lambda: self._open_audit_trail(index.row())
+        )
+        menu.addAction(f"Genealogy of {row.print_code}…", lambda: self._open_lineage(index.row()))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     # --- Biosafety PDF -------------------------------------------------
 
