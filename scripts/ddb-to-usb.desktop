@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DrosoDB → USB stick
+Comment=Copy the vial database to a USB stick for the recording rig
+Exec=sh -c 'python3 "$HOME/PyProject/drosodb/scripts/ddb_to_usb.py"; echo; read -p "Press Enter to close" x'
+Icon=drive-removable-media
+Terminal=true
+Categories=Science;
