@@ -9,6 +9,9 @@ from ddb.paths import resolve_data_dir, resolve_database_url
 # from `src/ddb/config.py` lands at the project root where the editable install
 # lives. Callers who want a different location can always override via env vars.
 _PKG_ROOT = Path(__file__).resolve().parent.parent.parent
+# The clone's .env. The GUI writes settings back here, so it must be this
+# absolute path, never one relative to wherever DDB happened to start.
+ENV_FILE = _PKG_ROOT / ".env"
 
 # Machine-level defaults come from local_paths.json if present. Env vars
 # (DDB_DATABASE_URL / DDB_DATA_DIR) still win — pydantic-settings sees
@@ -28,9 +31,7 @@ class Settings(BaseSettings):
     their own.
     """
 
-    model_config = SettingsConfigDict(
-        env_file=_PKG_ROOT / ".env", env_prefix="DDB_", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_prefix="DDB_", extra="ignore")
 
     database_url: str = _DEFAULT_DATABASE_URL
     data_dir: Path = _DEFAULT_DATA_DIR

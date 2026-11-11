@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 from sqlmodel import Session, select
 
-from ddb.config import settings
+from ddb.config import ENV_FILE, settings
 from ddb.current_user import _os_username
 from ddb.current_user import clear_cache as clear_user_cache
 from ddb.db import engine
@@ -56,8 +56,12 @@ from ddb.models import Donor, OrgUnit, User
 
 
 def _env_path() -> Path:
-    """Locate the project .env — relative to the current working directory."""
-    return Path(".env").resolve()
+    """The .env that settings are read from at start-up (the clone's own).
+
+    Not ``Path(".env")``: the app-grid launcher starts DDB in the user's
+    home, and settings saved there were silently lost on restart.
+    """
+    return ENV_FILE
 
 
 def _upsert_env_var(path: Path, key: str, value: str) -> None:

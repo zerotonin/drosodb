@@ -305,3 +305,14 @@ def test_decommission_without_reason_retires_the_vial(private_engine, monkeypatc
     with Session(private_engine) as session:
         assert not session.get(Vial, vial_id).is_active
     panel.close()
+
+
+def test_settings_are_saved_to_the_clone_env_wherever_ddb_starts(tmp_path, monkeypatch) -> None:
+    """The app-grid launcher starts DDB in $HOME; saves must still reach the clone."""
+    from ddb.config import ENV_FILE, settings
+    from ddb.gui.settings_tab import _env_path
+
+    monkeypatch.chdir(tmp_path)
+    assert _env_path() == ENV_FILE
+    assert ENV_FILE.is_absolute() and ENV_FILE.parent != tmp_path
+    assert settings.model_config["env_file"] == ENV_FILE
