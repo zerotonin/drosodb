@@ -28,11 +28,12 @@ def main() -> int:
     app.setApplicationName("DDB")
     app.setApplicationDisplayName("DDB — Drosophila vial tracker")
     # `setDesktopFileName` lets Wayland compositors match the running
-    # window to the .desktop entry the launcher script installs, so the
-    # taskbar shows the same icon as the desktop shortcut.
+    # window to ~/.local/share/applications/ddb.desktop (written by
+    # scripts/install_desktop_entry.sh), so the dock shows the DDB icon.
     app.setDesktopFileName("ddb")
-    if _ICON_PATH.exists():
-        app.setWindowIcon(QIcon(str(_ICON_PATH)))
+    # Prefer the installed rounded-tile icon; fall back to the raw logo.
+    fallback = QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else QIcon()
+    app.setWindowIcon(QIcon.fromTheme("ddb", fallback))
     apply_font_scale(app, settings.gui_font_scale)
     # Dim the window behind every modal dialog. The local keeps the filter
     # alive for as long as app.exec() runs.
