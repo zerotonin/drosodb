@@ -97,8 +97,35 @@ The one-liner:
 2. Creates a `ddb` conda env in the user's own Miniforge (or falls
    back to `miniconda3` if that's what they have).
 3. Installs the package editable with `pip install -e ".[gui,hardware,dev]"`.
-4. Drops a launcher at `~/.local/bin/ddb-launcher` + a
-   spec-compliant `~/Desktop/ddb.desktop` icon.
+4. Runs `scripts/install_desktop_entry.sh`, which installs the
+   `~/.local/bin/ddb-launcher` shim, the app icon (16–512 px) in
+   `~/.local/share/icons`, an app-grid entry in
+   `~/.local/share/applications/ddb.desktop` (search for "DDB", pin it
+   to the dock) and a trusted `ddb.desktop` icon on the desktop.
+
+!!! tip "Icon missing, or installed before November 2026?"
+    Re-run just that step from the user's own account, no sudo:
+
+    ```bash
+    bash ~/PyProject/drosodb/scripts/install_desktop_entry.sh
+    ```
+
+    Or, as the admin, update every biologist's clone and launcher in one
+    go (acts as each user, so file ownership stays theirs):
+
+    ```bash
+    sudo bash scripts/update_user_installs.sh        # default user list
+    sudo bash scripts/update_user_installs.sh alice  # or name them
+    ```
+
+    It fast-forwards each clone from GitHub (push first), refusing on
+    local edits like the in-app updater does, reinstalls packages only
+    when the new version needs them, then runs the launcher step.
+
+    Older installs only had the desktop-folder icon, so DDB didn't show
+    in the app grid and the dock showed a generic icon while it ran.
+    Set `DDB_NO_DESKTOP_ICON=1` to skip the desktop shortcut and keep
+    only the app-grid entry.
 
 !!! tip "Speeding up user #2 and beyond"
     conda-forge downloads through the campus link collapse to
