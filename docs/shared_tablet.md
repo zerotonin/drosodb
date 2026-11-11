@@ -104,10 +104,13 @@ The one-liner:
    to the dock) and a trusted `ddb.desktop` icon on the desktop.
 
 !!! tip "Icon missing, or installed before November 2026?"
-    Re-run just that step from the user's own account, no sudo:
+    Re-run just that step from the user's own account, no sudo, inside
+    their DDB clone (`~/PyProject/drosodb` for current installs; older
+    ones may be at `~/PyProjects/drosodb`):
 
     ```bash
-    bash ~/PyProject/drosodb/scripts/install_desktop_entry.sh
+    cd ~/PyProject/drosodb   # or wherever this user's clone lives
+    bash scripts/install_desktop_entry.sh
     ```
 
     Or, as the admin, update every biologist's clone and launcher in one
@@ -221,10 +224,12 @@ DDB's per-user config lives in `.env` inside each biologist's repo
 clone. Two paths are equivalent — pick whichever fits.
 
 **Self-service** — each biologist runs this from their own account,
-no sudo needed:
+no sudo needed, inside their DDB clone (`~/PyProject/drosodb` for
+current installs; older ones may be at `~/PyProjects/drosodb`):
 
 ```bash
-bash ~/PyProject/drosodb/scripts/setup_my_printer.sh
+cd ~/PyProject/drosodb   # or wherever this user's clone lives
+bash scripts/setup_my_printer.sh
 ```
 
 The script:
@@ -341,8 +346,8 @@ against the repo clone in each user's home.
 | `/srv/ddb/backups/*` | shared (root:ddb 2775) | Hourly snapshot ladder — see §6. |
 | `/srv/ddb/env-packs/*.tar.gz` | shared (root:ddb 2775) | Offline conda env packs for fast onboarding. |
 | `$REPO/local_paths.json` | admin (committed template, gitignored real) | Points DDB at the shared paths on this tablet. |
-| `$HOME/PyProject/drosodb/` | user | The biologist's git clone + editable install. |
-| `$HOME/PyProject/drosodb/.env` | user | Per-user config — printer MAC, camera defaults, etc. |
+| `$HOME/PyProject/drosodb/` | user | The biologist's git clone + editable install (older installs: `$HOME/PyProjects/drosodb/`; the admin scripts find either). |
+| `<clone>/.env` | user | Per-user config — printer MAC, camera defaults, etc. |
 | `$HOME/.config/ddb/cameras.json` | user | Per-user camera role → bus_path map. |
 | `$HOME/miniforge3/envs/ddb/` | user | The biologist's conda env. |
 | `/etc/ddb/backup.env` | admin | Backup timer's config — retention, rclone remote. |
