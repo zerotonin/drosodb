@@ -30,7 +30,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SOURCE = Path(os.environ.get("DDB_PATH") or os.environ.get("DDB_BACKUP_SRC") or "/srv/ddb/ddb.sqlite3")
+SOURCE = Path(
+    os.environ.get("DDB_PATH") or os.environ.get("DDB_BACKUP_SRC") or "/srv/ddb/ddb.sqlite3"
+)
 
 
 def pick_stick() -> Path:
