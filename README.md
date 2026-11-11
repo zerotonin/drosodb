@@ -40,7 +40,12 @@ with one SQLite file — not a multi-user SaaS.
   Kyoto/DGGR, NIG-Fly, KDRC, FlyORF, NDSSC) from a locally-cached
   FlyBase catalog — no per-import web calls.
 - **Reports** tab: search/filter by genotype, owner, org-unit, donor,
-  generation; export lineage as CSV.
+  generation; export lineage as CSV. Double-click a vial for its full
+  **audit trail** (every event, who did it, which vials it was flipped
+  from and into), or press **Genealogy…** for a zoomable flow chart of
+  its ancestors and descendants.
+- **Modal dialogs dim the window behind them**, so a pop-up never
+  blends into the main window (Qt's own Wayland frames have no shadow).
 - **Biosafety PDF report**: one-click PDF for institutional filings.
   Snapshot counts (active / decommissioned vials, in-stock / dropped
   genotypes), in-period activity (creates, flips, decommissions,
@@ -274,8 +279,10 @@ src/ddb/
                 genotype parser, refresh scheduler, collection→donor mapping)
   gui/          PySide6: Scan / Reports / Genotypes / Settings tabs,
                 dialogs (CreateVial, CreateGenotype, ImportGenotype,
-                PrinterReconnect, FlybaseDownload), shared widgets
-                (GenotypeForm, CameraWidget, PrinterStatusLight)
+                PrinterReconnect, FlybaseDownload, AuditTrail,
+                LineageChart), shared widgets (GenotypeForm,
+                CameraWidget, PrinterStatusLight), modal backdrop,
+                theme (Wong palette)
   importers/    FlyStockTable CSV importer
   cli.py        typer CLI entry point
   config.py     pydantic-settings (env-driven)
@@ -283,8 +290,10 @@ src/ddb/
   labels.py     17×54mm label rendering with QR
   qr.py         compact "DDB:<code>" payload + PNG builder
   lineage.py    vial lineage graph + CSV export
+  lineage_layout.py  layered layout for the genealogy chart (pure)
+  vial_history.py    readable per-vial audit trail
   reports.py    search + detail queries
-tests/          ~238 unit + integration tests
+tests/          ~290 unit + integration tests
 alembic/        SQLite migrations
 docs/           design docs + operations walkthrough
 ```
