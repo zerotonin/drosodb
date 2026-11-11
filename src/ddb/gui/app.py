@@ -15,6 +15,7 @@ from ddb.config import settings
 
 from .font_scale import apply_font_scale
 from .main_window import MainWindow
+from .modal_scrim import ModalScrim
 
 # Repo-shipped app icon. Falls back gracefully when the file is missing
 # (e.g. a stripped-down install) — Qt just shows the default window
@@ -33,6 +34,9 @@ def main() -> int:
     if _ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(_ICON_PATH)))
     apply_font_scale(app, settings.gui_font_scale)
+    # Dim the window behind every modal dialog. The local keeps the filter
+    # alive for as long as app.exec() runs.
+    modal_scrim = ModalScrim(app)  # noqa: F841
     window = MainWindow()
     window.show()
     return app.exec()

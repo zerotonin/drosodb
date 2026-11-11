@@ -4,7 +4,7 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -36,7 +36,9 @@ from .genotypes_tab import GenotypesTab
 from .printer_status import PrinterStatusMonitor, install_shared_monitor
 from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
+from .screen import clamp_to_screen
 from .settings_tab import SettingsTab
+from .theme import ACCENT
 
 DEFAULT_WINDOW_SIZE: tuple[int, int] = (1200, 720)
 SCREEN_FILL_FRACTION = 0.95
@@ -59,24 +61,11 @@ def _scrollable(content: QWidget) -> QScrollArea:
     return area
 
 
-def _initial_window_size() -> tuple[int, int]:
-    """Default window size, clamped to the primary screen's free area."""
-    width, height = DEFAULT_WINDOW_SIZE
-    screen = QGuiApplication.primaryScreen()
-    if screen is None:
-        return width, height
-    avail = screen.availableGeometry()
-    return (
-        min(width, int(avail.width() * SCREEN_FILL_FRACTION)),
-        min(height, int(avail.height() * SCREEN_FILL_FRACTION)),
-    )
-
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DDB — Drosophila Vial Tracking")
-        self.resize(*_initial_window_size())
+        self.resize(*clamp_to_screen(*DEFAULT_WINDOW_SIZE, SCREEN_FILL_FRACTION))
 
         # Single printer-status poller shared across tabs + dialogs. It
         # runs in its own QThread and publishes state changes via Qt
@@ -200,7 +189,7 @@ class MainWindow(QMainWindow):
 
     def _on_update_available(self, behind: int) -> None:
         what = f"Update available ({behind})" if behind else "Packages missing"
-        self._update_lbl.setText(f"<b style='color:#0072B2;'>{what}</b> — Settings → Updates")
+        self._update_lbl.setText(f"<b style='color:{ACCENT};'>{what}</b> — Settings → Updates")
         self._update_lbl.show()
 
     def _on_default_camera_changed(self, role: str) -> None:
