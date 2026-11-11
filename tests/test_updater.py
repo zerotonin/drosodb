@@ -15,12 +15,16 @@ from ddb.updater import (
     apply_update,
     check_for_update,
     check_schema,
+    console_scripts_changed,
     describe_local_version,
+    find_unmet_requirements,
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 GIT_IDENTITY = ("-c", "user.name=Test", "-c", "user.email=test@example.org")
+MISSING_PKG = "ddb-updater-test-not-installed"
+PYPROJECT_NEEDS_MISSING = f"[project]\nname = 'x'\ndependencies = ['{MISSING_PKG}>=1']\n"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -92,12 +96,33 @@ def test_new_upstream_commit_is_reported(upstream: Upstream) -> None:
     assert not status.adds_migrations
 
 
-def test_dependency_and_migration_changes_are_flagged(upstream: Upstream) -> None:
-    upstream.publish("pyproject.toml", "[project]\nname = 'y'\n", "deps")
+def test_new_dependency_and_migration_are_flagged(upstream: Upstream) -> None:
+    upstream.publish("pyproject.toml", PYPROJECT_NEEDS_MISSING, "deps")
     upstream.publish("alembic/versions/abc_add_col.py", "# migration\n", "schema")
     status = check_for_update(upstream.clone)
     assert status.needs_reinstall
+    assert status.unmet_requirements == (f"{MISSING_PKG}>=1",)
     assert status.adds_migrations
+
+
+def test_tooling_only_pyproject_change_needs_no_reinstall(upstream: Upstream) -> None:
+    upstream.publish(
+        "pyproject.toml",
+        "[project]\nname = 'x'\n\n[tool.ruff]\nline-length = 100\n",
+        "chore(lint): ruff config",
+    )
+    status = check_for_update(upstream.clone)
+    assert status.changed_paths == ("pyproject.toml",)
+    assert not status.needs_reinstall
+
+
+def test_ci_only_extra_needs_no_reinstall(upstream: Upstream) -> None:
+    upstream.publish(
+        "pyproject.toml",
+        f"[project]\nname = 'x'\n[project.optional-dependencies]\nci = ['{MISSING_PKG}']\n",
+        "ci: new extra",
+    )
+    assert not check_for_update(upstream.clone).needs_reinstall
 
 
 def test_not_a_git_checkout_raises(tmp_path: Path) -> None:
@@ -133,9 +158,26 @@ def test_apply_update_reinstalls_when_pyproject_changes(
 ) -> None:
     calls: list[Path] = []
     monkeypatch.setattr(updater, "_reinstall", lambda repo: calls.append(repo) or "")
-    upstream.publish("pyproject.toml", "[project]\nname = 'z'\n", "deps")
+    upstream.publish("pyproject.toml", PYPROJECT_NEEDS_MISSING, "deps")
     result = apply_update(upstream.clone)
     assert result.reinstalled
+    assert calls == [upstream.clone]
+
+
+def test_up_to_date_but_missing_packages_can_be_repaired(
+    upstream: Upstream, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manual `git pull` skips the reinstall; the button must still fix it."""
+    upstream.publish("pyproject.toml", PYPROJECT_NEEDS_MISSING, "deps")
+    _git(upstream.clone, "pull", "-q", "--ff-only")
+    status = check_for_update(upstream.clone)
+    assert status.is_up_to_date
+    assert status.needs_reinstall
+    assert status.can_fast_forward
+
+    calls: list[Path] = []
+    monkeypatch.setattr(updater, "_reinstall", lambda repo: calls.append(repo) or "")
+    assert apply_update(upstream.clone).reinstalled
     assert calls == [upstream.clone]
 
 
@@ -172,9 +214,47 @@ def test_failed_reinstall_reports_manual_command(
         raise UpdateError("no network")
 
     monkeypatch.setattr(updater, "_reinstall", _boom)
-    upstream.publish("pyproject.toml", "[project]\nname = 'z'\n", "deps")
+    upstream.publish("pyproject.toml", PYPROJECT_NEEDS_MISSING, "deps")
     with pytest.raises(UpdateError, match="pip install -e"):
         apply_update(upstream.clone)
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Environment vs pyproject
+# ─────────────────────────────────────────────────────────────────
+
+
+def test_unmet_requirements_checks_presence_version_markers_and_extras() -> None:
+    text = (
+        "[project]\nname = 'x'\n"
+        "dependencies = [\n"
+        "    'pytest>=1',\n"
+        "    'pytest>=999',\n"
+        f"    '{MISSING_PKG}',\n"
+        f"    '{MISSING_PKG}-py2; python_version < \"3\"',\n"
+        "]\n"
+        "[project.optional-dependencies]\n"
+        f"gui = ['{MISSING_PKG}-gui']\n"
+        f"ci = ['{MISSING_PKG}-ci']\n"
+    )
+    assert find_unmet_requirements(text) == (
+        "pytest>=999",
+        MISSING_PKG,
+        f"{MISSING_PKG}-gui",
+    )
+
+
+def test_real_pyproject_is_satisfied_by_this_environment() -> None:
+    text = (updater.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert find_unmet_requirements(text) == ()
+    assert not console_scripts_changed(text)
+
+
+def test_console_scripts_change_is_detected() -> None:
+    text = (updater.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    renamed = text.replace('ddb = "ddb.cli:app"', 'ddb-lab = "ddb.cli:app"')
+    assert renamed != text
+    assert console_scripts_changed(renamed)
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -74,8 +74,9 @@ class _Worker(QThread):
 class UpdateGroup(QGroupBox):
     """Show the installed version, check upstream, fast-forward on request.
 
-    Emits ``update_available(behind)`` after a successful check so the main
-    window can flag it in the status bar.
+    Emits ``update_available(behind)`` after a check that found work to do,
+    so the main window can flag it in the status bar. ``behind == 0`` means
+    the code is current but the environment is missing packages.
     """
 
     update_available = Signal(int)
@@ -143,15 +144,22 @@ class UpdateGroup(QGroupBox):
         self._set_buttons_enabled(True)
         self.update_btn.setEnabled(status.can_fast_forward)
         self._show_incoming(status)
-        if status.is_up_to_date:
+        if status.is_up_to_date and not status.needs_reinstall:
             self.state_lbl.setText(f"Up to date with <b>{status.upstream}</b>.")
             return
-        text = f"<b>{status.behind}</b> new update(s) on <b>{status.upstream}</b>."
+        if status.is_up_to_date:
+            text = (
+                "Code is up to date, but this environment is missing packages: "
+                f"<b>{html.escape(', '.join(status.unmet_requirements))}</b>. "
+                "<i>Update now</i> installs them."
+            )
+        else:
+            text = f"<b>{status.behind}</b> new update(s) on <b>{status.upstream}</b>."
         reason = status.blocking_reason()
         if reason is not None:
             text += f"<br><span style='color:#b00;'>{html.escape(reason)}</span>"
-        elif status.needs_reinstall:
-            text += "<br><i>Includes dependency changes; updating reinstalls DDB.</i>"
+        elif status.needs_reinstall and not status.is_up_to_date:
+            text += "<br><i>Needs new packages; updating installs them.</i>"
         self.state_lbl.setText(text)
         self.update_available.emit(status.behind)
 

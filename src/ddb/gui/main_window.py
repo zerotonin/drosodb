@@ -199,9 +199,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Font scale: {clamped:.2f}×", 2000)
 
     def _on_update_available(self, behind: int) -> None:
-        self._update_lbl.setText(
-            f"<b style='color:#0072B2;'>Update available ({behind})</b> — Settings → Updates"
-        )
+        what = f"Update available ({behind})" if behind else "Packages missing"
+        self._update_lbl.setText(f"<b style='color:#0072B2;'>{what}</b> — Settings → Updates")
         self._update_lbl.show()
 
     def _on_default_camera_changed(self, role: str) -> None:

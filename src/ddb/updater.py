@@ -10,9 +10,14 @@
 # ╚══════════════════════════════════════════════════════════════════╝
 """Check whether this DDB checkout is behind upstream and fast-forward it.
 
-Every tablet user runs their own editable clone, so "update" means a git
-fast-forward of that clone plus, when ``pyproject.toml`` changed, an
-editable reinstall into the running interpreter's environment.
+Every tablet user runs their own editable clone. The editable install is
+a static ``.pth`` entry pointing at ``src/``, so code, new modules and data
+files are live the moment git updates them. A reinstall is only needed
+when the environment no longer satisfies the requirements the tablet uses
+(core dependencies plus the ``gui`` and ``hardware`` extras) or the console
+scripts changed. That is checked against the installed environment, not
+inferred from whether ``pyproject.toml`` was touched: most edits to that
+file are tool config (ruff, pytest, the ``ci`` extra) and need nothing.
 
 Schema migrations are deliberately *not* applied here: the SQLite file is
 shared by every user, and upgrading it while someone else has an older
@@ -25,7 +30,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 from sqlalchemy.engine import Engine
@@ -39,9 +46,9 @@ FETCH_TIMEOUT_S = 30
 PIP_TIMEOUT_S = 900
 MAX_INCOMING_SHOWN = 20
 
-REINSTALL_TRIGGERS: tuple[str, ...] = ("pyproject.toml",)
 MIGRATIONS_DIR = "alembic/versions/"
-PIP_EXTRAS = "gui,hardware"
+INSTALLED_EXTRAS: tuple[str, ...] = ("gui", "hardware")
+PIP_EXTRAS = ",".join(INSTALLED_EXTRAS)
 
 # BatchMode makes ssh fail instead of prompting for a passphrase that a
 # GUI has no terminal to answer; the user's own GIT_SSH_COMMAND still wins.
@@ -71,6 +78,8 @@ class UpdateStatus:
     dirty_files: tuple[str, ...] = ()
     incoming: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
+    unmet_requirements: tuple[str, ...] = ()
+    scripts_changed: bool = False
 
     @property
     def is_up_to_date(self) -> bool:
@@ -86,7 +95,8 @@ class UpdateStatus:
 
     @property
     def needs_reinstall(self) -> bool:
-        return any(p in REINSTALL_TRIGGERS for p in self.changed_paths)
+        """Upstream's pyproject asks for something this environment lacks."""
+        return bool(self.unmet_requirements) or self.scripts_changed
 
     @property
     def adds_migrations(self) -> bool:
@@ -95,7 +105,9 @@ class UpdateStatus:
     def blocking_reason(self) -> str | None:
         """Why :func:`apply_update` would refuse, or ``None`` if it can run."""
         if self.is_up_to_date:
-            return "Already up to date."
+            # Up to date but missing packages: the merge is a no-op and the
+            # reinstall repairs the environment, so let it run.
+            return None if self.needs_reinstall else "Already up to date."
         if self.dirty_files:
             shown = ", ".join(self.dirty_files[:5])
             return (
@@ -194,6 +206,7 @@ def check_for_update(repo: Path = REPO_ROOT, *, fetch: bool = True) -> UpdateSta
         line[3:]
         for line in _git(repo, "status", "--porcelain", "--untracked-files=no").splitlines()
     ]
+    upstream_pyproject = _git(repo, "show", f"{upstream}:pyproject.toml")
     return UpdateStatus(
         branch=branch,
         upstream=upstream,
@@ -205,6 +218,8 @@ def check_for_update(repo: Path = REPO_ROOT, *, fetch: bool = True) -> UpdateSta
         dirty_files=tuple(dirty),
         incoming=tuple(incoming),
         changed_paths=tuple(changed),
+        unmet_requirements=find_unmet_requirements(upstream_pyproject),
+        scripts_changed=console_scripts_changed(upstream_pyproject),
     )
 
 
@@ -230,6 +245,7 @@ def apply_update(repo: Path = REPO_ROOT) -> UpdateResult:
     log = [_git(repo, "merge", "--ff-only", status.upstream)]
     new_sha = _git(repo, "rev-parse", "--short", "HEAD")
     if status.needs_reinstall:
+        log.append("Installing: " + ", ".join(status.unmet_requirements or ("console scripts",)))
         try:
             log.append(_reinstall(repo))
         except UpdateError as e:
@@ -243,6 +259,52 @@ def apply_update(repo: Path = REPO_ROOT) -> UpdateResult:
         reinstalled=status.needs_reinstall,
         log="\n".join(part for part in log if part),
     )
+
+
+def find_unmet_requirements(
+    pyproject_text: str, extras: tuple[str, ...] = INSTALLED_EXTRAS
+) -> tuple[str, ...]:
+    """Requirements of the project (plus ``extras``) this environment lacks.
+
+    A requirement is unmet when its distribution is missing or installed at
+    a version outside the specifier. Markers are evaluated for the running
+    interpreter, so platform-specific requirements don't false-alarm.
+    """
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        return ("packaging",)  # declared dependency; a reinstall brings it
+
+    project = tomllib.loads(pyproject_text).get("project", {})
+    raw = list(project.get("dependencies", []))
+    for extra in extras:
+        raw += project.get("optional-dependencies", {}).get(extra, [])
+
+    unmet: list[str] = []
+    for line in raw:
+        req = Requirement(line)
+        if req.marker is not None and not req.marker.evaluate():
+            continue
+        try:
+            installed = metadata.version(req.name)
+        except metadata.PackageNotFoundError:
+            unmet.append(str(req))
+            continue
+        if not req.specifier.contains(installed, prereleases=True):
+            unmet.append(str(req))
+    return tuple(dict.fromkeys(unmet))
+
+
+def console_scripts_changed(pyproject_text: str) -> bool:
+    """True when ``[project.scripts]`` differs from the installed entry points."""
+    project = tomllib.loads(pyproject_text).get("project", {})
+    wanted = dict(project.get("scripts", {}))
+    try:
+        dist = metadata.distribution(project.get("name", ""))
+    except (metadata.PackageNotFoundError, ValueError):
+        return bool(wanted)
+    installed = {ep.name: ep.value for ep in dist.entry_points if ep.group == "console_scripts"}
+    return wanted != installed
 
 
 def restart_command() -> list[str]:
