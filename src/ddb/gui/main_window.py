@@ -3,8 +3,8 @@ from __future__ import annotations
 import contextlib
 from datetime import UTC, datetime, timedelta
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStatusBar,
     QTabWidget,
+    QToolButton,
     QWidget,
 )
 from sqlmodel import Session
@@ -24,6 +25,7 @@ from ddb.db import engine
 from ddb.flybase import RefreshDecision, decide_refresh, paths_for, read_meta
 from ddb.flybase.catalog import read_postpone, write_postpone
 from ddb.gui.dialogs.flybase_download import FlybaseDownloadDialog
+from ddb.manual import TAB_SECTIONS
 from ddb.paths import active_profile_name
 
 from .font_scale import (
@@ -33,6 +35,7 @@ from .font_scale import (
     clamp_font_scale,
 )
 from .genotypes_tab import GenotypesTab
+from .help_window import show_help
 from .printer_status import PrinterStatusMonitor, install_shared_monitor
 from .reports_tab import ReportsTab
 from .scan_tab import ScanTab
@@ -100,6 +103,20 @@ class MainWindow(QMainWindow):
         # stays fresh after creating/editing from elsewhere in the app.
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
+
+        # Help sits in the tab bar's free corner; F1 opens the manual at
+        # the section for whichever tab is showing.
+        self.help_btn = QToolButton()
+        self.help_btn.setText("Help")
+        self.help_btn.setIcon(QIcon.fromTheme("help-browser"))
+        self.help_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.help_btn.setAutoRaise(True)
+        self.help_btn.setToolTip("Open the user manual for this tab (F1)")
+        self.help_btn.clicked.connect(self.open_help)
+        self.tabs.setCornerWidget(self.help_btn, Qt.Corner.TopRightCorner)
+        QShortcut(
+            QKeySequence(QKeySequence.StandardKey.HelpContents), self, activated=self.open_help
+        )
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready.")
@@ -191,6 +208,10 @@ class MainWindow(QMainWindow):
         what = f"Update available ({behind})" if behind else "Packages missing"
         self._update_lbl.setText(f"<b style='color:{ACCENT};'>{what}</b> — Settings → Updates")
         self._update_lbl.show()
+
+    def open_help(self) -> None:
+        """Show the manual at the current tab's section."""
+        show_help(TAB_SECTIONS.get(self.tabs.tabText(self.tabs.currentIndex())))
 
     def _on_default_camera_changed(self, role: str) -> None:
         idx = self.scan_tab.role_box.findText(role)
