@@ -18,5 +18,7 @@ PrivateTmp=true
 # a read-only backup because WAL-mode SQLite touches -wal/-shm files
 # alongside the DB when the writer (the GUI) is active. This still
 # implicitly covers /srv/ddb/backups (the snapshot destination).
-ReadWritePaths=/srv/ddb
+# /etc/ddb must be writable too: rclone saves the refreshed OAuth token
+# back into /etc/ddb/rclone.conf via a temp file in that directory.
+ReadWritePaths=/srv/ddb /etc/ddb
 NoNewPrivileges=true
