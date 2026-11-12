@@ -126,10 +126,10 @@ class HelpWindow(QWidget):
 
         self.contents.itemClicked.connect(self._on_contents_clicked)
         self.browser.anchorClicked.connect(self._on_link)
-        self.search.textChanged.connect(lambda _text: self.find(from_start=True))
+        self.search.textChanged.connect(self._find_from_start)
         self.search.returnPressed.connect(self.find)
         self.next_btn.clicked.connect(self.find)
-        self.prev_btn.clicked.connect(lambda: self.find(backward=True))
+        self.prev_btn.clicked.connect(self._find_previous)
         QShortcut(QKeySequence.StandardKey.Find, self, activated=self.search.setFocus)
         QShortcut(QKeySequence.StandardKey.FindNext, self, activated=self.find)
         QShortcut(QKeySequence("Escape"), self, activated=self.close)
@@ -185,6 +185,12 @@ class HelpWindow(QWidget):
         self.match_lbl.setText("" if found else "No matches")
         self.match_lbl.setStyleSheet("" if found else NO_MATCH_STYLE)
         return found
+
+    def _find_from_start(self, _text: str = "") -> bool:
+        return self.find(from_start=True)
+
+    def _find_previous(self) -> bool:
+        return self.find(backward=True)
 
     def showEvent(self, event: object) -> None:  # noqa: N802 — Qt override
         super().showEvent(event)
