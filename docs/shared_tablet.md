@@ -351,7 +351,7 @@ against the repo clone in each user's home.
 | `$HOME/.config/ddb/cameras.json` | user | Per-user camera role → bus_path map. |
 | `$HOME/miniforge3/envs/ddb/` | user | The biologist's conda env. |
 | `/etc/ddb/backup.env` | admin | Backup timer's config — retention, rclone remote. |
-| `/etc/ddb/rclone.conf` | admin (root 0644) | rclone remote credentials for offsite push. |
+| `/etc/ddb/rclone.conf` | admin (root 0600) | rclone remote credentials for offsite push (holds the OAuth token: never world-readable). |
 | `/usr/local/sbin/ddb-backup` | admin (root 0755) | The backup script itself, installed from `scripts/`. |
 | `/etc/systemd/system/ddb-backup.{timer,service}` | admin | Systemd units triggering the backup. |
 
@@ -457,6 +457,16 @@ just the subdir), because WAL-mode SQLite touches `-wal`/`-shm`
 sidecars next to the source DB even for a read-only snapshot. Fixed
 in `0cfdf56` — if you see this on an older tablet, `git pull` and
 re-run `sudo bash scripts/setup_system_backup.sh`.
+
+### `Failed to save config after 10 tries` in the backup log
+
+rclone refreshes the Google Drive OAuth token on each push and writes it
+back to `/etc/ddb/rclone.conf`. Under `ProtectSystem=strict` that
+directory is read-only unless the unit lists it in `ReadWritePaths=`. The
+push itself still succeeds with the in-memory token, so the error is
+easy to ignore, but the saved token never gets refreshed. If you see
+this on an older tablet, `git pull` and re-run
+`sudo bash scripts/setup_system_backup.sh`.
 
 ### Backup timer looks like it's firing twice
 
