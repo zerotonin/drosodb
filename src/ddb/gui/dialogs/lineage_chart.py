@@ -47,7 +47,9 @@ def show_lineage(parent: QWidget, vial_id: int) -> None:
     except LookupError as e:
         QMessageBox.warning(parent, "Genealogy", str(e))
         return
-    LineageDialog(graph, parent).exec()
+    dialog = LineageDialog(graph, parent)
+    dialog.exec()
+    dialog.deleteLater()  # parented to the window: free it, don't keep one per opening
 
 
 class LineageDialog(QDialog):
@@ -72,8 +74,11 @@ class LineageDialog(QDialog):
         fit = QPushButton("Fit")
         for button in (zoom_out, zoom_in):
             button.setFixedWidth(button.sizeHint().height() + 8)
-        zoom_out.clicked.connect(lambda: self.view.zoom_by(1 / ZOOM_STEP))
-        zoom_in.clicked.connect(lambda: self.view.zoom_by(ZOOM_STEP))
+        # Bound methods, not lambdas: PySide keeps a lambda alive on the C++
+        # side, and one closing over self would keep the dialog (and its whole
+        # scene) alive until exit, where PySide 6.12 crashes tearing it down.
+        zoom_out.clicked.connect(self._zoom_out)
+        zoom_in.clicked.connect(self._zoom_in)
         fit.clicked.connect(self._fit)
 
         buttons = QHBoxLayout()
@@ -100,6 +105,12 @@ class LineageDialog(QDialog):
 
     def _fit(self) -> None:
         self.view.fit(self.scene.focus_card)
+
+    def _zoom_in(self) -> None:
+        self.view.zoom_by(ZOOM_STEP)
+
+    def _zoom_out(self) -> None:
+        self.view.zoom_by(1 / ZOOM_STEP)
 
     def _open_trail_for_selection(self) -> None:
         selected = [item for item in self.scene.selectedItems() if isinstance(item, VialCard)]

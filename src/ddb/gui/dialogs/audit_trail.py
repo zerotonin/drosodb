@@ -59,7 +59,9 @@ def show_audit_trail(parent: QWidget, vial_id: int, *, allow_genealogy: bool = T
     if detail is None:
         QMessageBox.warning(parent, "Audit trail", f"No vial with id {vial_id}.")
         return
-    AuditTrailDialog(detail, entries, parent, allow_genealogy=allow_genealogy).exec()
+    dialog = AuditTrailDialog(detail, entries, parent, allow_genealogy=allow_genealogy)
+    dialog.exec()
+    dialog.deleteLater()  # parented to the window: free it, don't keep one per opening
 
 
 def format_local(when: datetime) -> str:

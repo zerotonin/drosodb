@@ -206,6 +206,25 @@ def test_genealogy_dialog_draws_every_vial_and_arrow(vial_family) -> None:  # no
     dialog.close()
 
 
+def test_genealogy_dialog_is_freed_after_closing(vial_family) -> None:  # noqa: ANN001
+    """A leaked dialog leaves its scene for PySide to tear down at exit,
+    which segfaults on PySide 6.12 (CI went red with every test passing)."""
+    import gc
+    import weakref
+
+    from ddb.gui.dialogs.lineage_chart import LineageDialog
+    from ddb.lineage import lineage_graph
+
+    session, middle = vial_family
+    _qapp()
+    dialog = LineageDialog(lineage_graph(session, middle.id))
+    dialog.close()
+    alive = weakref.ref(dialog)
+    del dialog
+    gc.collect()
+    assert alive() is None, "something (a lambda closing over self?) keeps the dialog alive"
+
+
 def test_audit_trail_dialog_lists_every_event(vial_family) -> None:  # noqa: ANN001
     from ddb.gui.dialogs.audit_trail import AuditTrailDialog
     from ddb.reports import vial_detail
