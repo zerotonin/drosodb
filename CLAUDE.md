@@ -18,6 +18,8 @@ changed behaviour of an existing control. Concretely:
    script uses a throwaway demo database and never touches real data.
 3. A new tab needs an entry in `TAB_SECTIONS` (`src/ddb/manual.py`) so
    F1 lands on its section.
+4. Rebuild the PDF copy: `python scripts/build_manual_pdf.py` writes
+   `docs/manual/ddb_manual.pdf`. The PDF is not committed.
 
 `tests/test_manual.py` fails when a button, checkbox or group box exists
 that the manual never names, when a link or image is broken, or when
